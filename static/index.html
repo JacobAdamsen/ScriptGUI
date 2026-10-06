@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScriptGUI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">Script<span>GUI</span></div>
+    <div class="group">
+      <button id="btn-new" title="New pipeline">New</button>
+      <select id="sel-open" title="Open a pipeline"><option value="">Open…</option></select>
+      <input id="pipe-name" class="name" spellcheck="false" title="Pipeline name">
+      <button id="btn-save" title="Save to pipelines/ (Ctrl+S)">Save</button>
+      <span id="dirty" class="dirty" title="Unsaved changes">●</span>
+    </div>
+    <div class="group">
+      <label>Python <input id="pipe-python" placeholder="same as server" spellcheck="false"
+        title="Python interpreter used to run the scripts (e.g. a venv's python.exe)"></label>
+      <label>Output dir <input id="pipe-workdir" spellcheck="false"
+        title="Folder where each node's output files are written (relative to the project folder)"></label>
+    </div>
+    <div class="group">
+      <button id="btn-validate">Validate</button>
+      <button id="btn-run" class="primary">▶ Run all</button>
+      <button id="btn-run-from" title="Run the selected node and everything downstream">▶ Run from selected</button>
+      <button id="btn-cancel" class="danger" disabled>■ Cancel</button>
+    </div>
+    <div id="run-status" class="run-status"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <h2>Script library</h2>
+      <div class="row">
+        <input id="scripts-dir" spellcheck="false" title="Folder to scan for .py files">
+        <button id="btn-refresh" title="Rescan folder">↻</button>
+      </div>
+      <ul id="script-list" class="script-list"></ul>
+      <p class="hint">Drag a script onto the canvas, or double-click it.</p>
+      <h2>Add by path</h2>
+      <div class="row">
+        <input id="add-path" placeholder="C:\path\to\script.py" spellcheck="false">
+        <button id="btn-add-path">Add</button>
+      </div>
+    </aside>
+
+    <section class="canvas-wrap" id="canvas-wrap">
+      <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" class="grid-dot"/>
+          </pattern>
+          <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="8" height="8" class="hatch-bg"/>
+            <line x1="0" y1="0" x2="0" y2="8" class="hatch-line"/>
+          </pattern>
+        </defs>
+        <rect class="grid-bg" width="100%" height="100%" fill="url(#grid)"/>
+        <g id="viewport">
+          <g id="edges"></g>
+          <path id="drag-edge" class="edge dragging" d=""/>
+          <g id="nodes"></g>
+        </g>
+      </svg>
+      <div class="empty-hint" id="empty-hint">Drag scripts from the library to start building a pipeline</div>
+      <div class="zoom-controls">
+        <button data-zoom="in" title="Zoom in">+</button>
+        <button data-zoom="out" title="Zoom out">−</button>
+        <button data-zoom="fit" title="Fit to view">⤢</button>
+      </div>
+    </section>
+
+    <aside class="inspector" id="inspector"></aside>
+  </main>
+
+  <section class="logpanel">
+    <div class="log-tabs" id="log-tabs"></div>
+    <div class="log-body" id="log-body"></div>
+  </section>
+
+  <div id="toast" class="toast"></div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

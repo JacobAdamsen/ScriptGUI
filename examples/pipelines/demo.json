@@ -1,0 +1,45 @@
+{
+  "name": "demo",
+  "python": "",
+  "workdir": "runs/demo",
+  "scripts_dir": "examples/scripts",
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "Generate",
+      "script": "examples/scripts/generate_data.py",
+      "x": 60,
+      "y": 100,
+      "inputs": [],
+      "outputs": [{ "name": "out_csv", "path": "data.csv" }],
+      "params": [
+        { "name": "n", "value": "200" },
+        { "name": "seed", "value": "42" }
+      ]
+    },
+    {
+      "id": "n2",
+      "label": "Process",
+      "script": "examples/scripts/process_data.py",
+      "x": 360,
+      "y": 100,
+      "inputs": [{ "name": "in_csv", "path": "" }],
+      "outputs": [{ "name": "out_csv", "path": "filtered.csv" }],
+      "params": [{ "name": "threshold", "value": "0.5" }]
+    },
+    {
+      "id": "n3",
+      "label": "Report",
+      "script": "examples/scripts/make_report.py",
+      "x": 660,
+      "y": 100,
+      "inputs": [{ "name": "in_csv", "path": "" }],
+      "outputs": [{ "name": "out_txt", "path": "report.txt" }],
+      "params": []
+    }
+  ],
+  "edges": [
+    { "source": "n1", "source_port": "out_csv", "target": "n2", "target_port": "in_csv" },
+    { "source": "n2", "source_port": "out_csv", "target": "n3", "target_port": "in_csv" }
+  ]
+}
