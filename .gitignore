@@ -7,6 +7,9 @@ venv/
 # Pipeline run outputs
 runs/
 
+# Pipelines saved inside the ScriptGUI folder (keep your own pipelines in your project folders)
+pipelines/
+
 # Editors / OS
 .vscode/
 .idea/

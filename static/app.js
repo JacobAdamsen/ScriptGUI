@@ -8,6 +8,7 @@ const MAX_LOG_LINES = 5000;
 
 const state = {
   pipeline: null,
+  file: null,       // full path of the .json this pipeline is saved in (null = not saved yet)
   dirty: false,
   issues: [],
   commands: {},
@@ -78,13 +79,20 @@ function normalize(p) {
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ pipeline: state.pipeline, dirty: state.dirty }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ pipeline: state.pipeline, dirty: state.dirty, file: state.file }));
   } catch { /* storage unavailable: not critical */ }
 }
 
 function setDirty(on) {
   state.dirty = on;
   $("#dirty").classList.toggle("on", on);
+}
+
+function setFile(path) {
+  state.file = path || null;
+  const label = $("#file-label");
+  label.textContent = state.file ? basename(state.file) : "not saved yet";
+  label.title = state.file || "Use Save as… to choose where this pipeline is saved";
 }
 
 // ---------------------------------------------------------------- editor
@@ -112,8 +120,9 @@ function modelChanged() {
   changed();
 }
 
-function setPipeline(p, dirty = false) {
+function setPipeline(p, dirty = false, file = null) {
   state.pipeline = normalize(p);
+  setFile(file);
   state.logs = {};
   state.logTab = "issues";
   state.issues = [];
@@ -569,14 +578,21 @@ function finishRun() {
 
 // ---------------------------------------------------------------- open / save
 
+// Open… values: "file:<full path>", "example:<name>", "saved:<name>" (old ScriptGUI/pipelines) or "browse".
 async function loadPipelineList() {
   const sel = $("#sel-open");
-  const items = await api("GET", "/api/pipelines");
-  sel.replaceChildren(h("option", { value: "" }, "Open…"));
-  for (const [source, title] of [["saved", "Saved"], ["example", "Examples"]]) {
+  const [items, recent] = await Promise.all([api("GET", "/api/pipelines"), api("GET", "/api/recent")]);
+  sel.replaceChildren(h("option", { value: "" }, "Open…"), h("option", { value: "browse" }, "Open file by path…"));
+  if (recent.length) {
+    sel.append(h("optgroup", { label: "Recent" }, recent.map((r) =>
+      h("option", { value: `file:${r.path}`, title: r.path, disabled: !r.exists },
+        `${r.name}  (${r.folder})${r.exists ? "" : "  missing"}`))));
+  }
+  const groups = [["example", "Examples"], ["saved", "In the ScriptGUI folder"]];
+  for (const [source, title] of groups) {
     const group = items.filter((i) => i.source === source);
     if (group.length) {
-      sel.append(h("optgroup", { label: title }, group.map((i) => h("option", { value: `${source}/${i.name}` }, i.name))));
+      sel.append(h("optgroup", { label: title }, group.map((i) => h("option", { value: `${source}:${i.name}` }, i.name))));
     }
   }
   sel.value = "";
@@ -584,6 +600,7 @@ async function loadPipelineList() {
 
 async function openPipeline(source, name) {
   try {
+    // Examples and old ScriptGUI-folder files open without a file, so Save asks where to save.
     setPipeline(await api("GET", `/api/pipelines/${source}/${encodeURIComponent(name)}`));
     setRunStatus("");
   } catch (e) {
@@ -591,19 +608,50 @@ async function openPipeline(source, name) {
   }
 }
 
-async function save() {
-  const name = $("#pipe-name").value.trim() || "untitled";
-  if (!/^[\w\- .]+$/.test(name)) return toast("Names may only contain letters, digits, spaces, '-', '_' and '.'");
-  state.pipeline.name = name;
+async function openFile(path) {
   try {
-    const res = await api("PUT", `/api/pipelines/${encodeURIComponent(name)}`, state.pipeline);
+    const res = await api("GET", "/api/pipeline-file?path=" + encodeURIComponent(path));
+    setPipeline(res.pipeline, false, res.path);
+    setRunStatus("");
+    loadPipelineList();
+  } catch (e) {
+    toast(`Could not open: ${e.message}`);
+  }
+}
+
+const cleanPath = (p) => p.trim().replace(/^"|"$/g, "");
+const isAbsolute = (p) => /^([A-Za-z]:[\\/]|\\\\|\/)/.test(p);
+
+function suggestedPath() {
+  if (state.file) return state.file;
+  const name = (state.pipeline.name || "untitled").replace(/[<>:"/\\|?*]/g, "_");
+  const dir = state.pipeline.scripts_dir.replace(/[\\/]+$/, "");
+  // Relative script folders live inside ScriptGUI, so suggest its git-ignored pipelines folder.
+  return isAbsolute(dir) ? `${dir}\\${name}.json` : `pipelines\\${name}.json`;
+}
+
+async function writeFile(path) {
+  state.pipeline.name = $("#pipe-name").value.trim() || "untitled";
+  try {
+    const res = await api("PUT", "/api/pipeline-file", { path, pipeline: state.pipeline });
+    setFile(res.path);
     setDirty(false);
     persist();
-    await loadPipelineList();
+    loadPipelineList();
     toast(`Saved to ${res.path}`);
   } catch (e) {
     toast(`Save failed: ${e.message}`);
   }
+}
+
+function saveAs() {
+  const path = prompt("Save pipeline as (full path to a .json file, e.g. in your project folder):", suggestedPath());
+  if (path && cleanPath(path)) writeFile(cleanPath(path));
+}
+
+function save() {
+  if (state.file) writeFile(state.file);
+  else saveAs();
 }
 
 const confirmDiscard = () => !state.dirty || confirm("Discard unsaved changes to this pipeline?");
@@ -615,12 +663,19 @@ function bindUI() {
   $("#sel-open").onchange = (ev) => {
     const v = ev.target.value;
     ev.target.value = "";
-    if (v && confirmDiscard()) {
-      const [source, ...rest] = v.split("/");
-      openPipeline(source, rest.join("/"));
+    if (!v || !confirmDiscard()) return;
+    if (v === "browse") {
+      const path = prompt("Open pipeline (full path to a .json file):", state.file || "");
+      if (path && cleanPath(path)) openFile(cleanPath(path));
+    } else if (v.startsWith("file:")) {
+      openFile(v.slice(5));
+    } else {
+      const i = v.indexOf(":");
+      openPipeline(v.slice(0, i), v.slice(i + 1));
     }
   };
   $("#btn-save").onclick = save;
+  $("#btn-save-as").onclick = saveAs;
   $("#pipe-name").oninput = (ev) => { state.pipeline.name = ev.target.value; updateWorkdirPlaceholder(); changed(); };
   $("#pipe-python").oninput = (ev) => { state.pipeline.python = ev.target.value; changed(); };
   $("#pipe-workdir").oninput = (ev) => { state.pipeline.workdir = ev.target.value; changed(); };
@@ -683,7 +738,7 @@ async function init() {
   try {
     restored = JSON.parse(localStorage.getItem(STORAGE_KEY));
   } catch { /* ignore */ }
-  if (restored?.pipeline) return setPipeline(restored.pipeline, restored.dirty);
+  if (restored?.pipeline) return setPipeline(restored.pipeline, restored.dirty, restored.file);
   try {
     setPipeline(await api("GET", "/api/pipelines/example/demo"));
   } catch {

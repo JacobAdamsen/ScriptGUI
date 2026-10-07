@@ -63,7 +63,14 @@ args = ap.parse_args()
 | `static/editor.js` | SVG node editor (pan, zoom, drag, connect) |
 | `static/app.js` | Toolbar, library, inspector, run controls, log panel |
 | `examples/` | Three demo scripts and the demo pipeline |
-| `pipelines/` | Your saved pipelines |
 
-The editor also keeps the current pipeline in the browser's local storage, so a page reload doesn't lose work.
-Use **Save** to write it to `pipelines/<name>.json`.
+## Saving pipelines
+
+A pipeline is a `.json` file that you keep **in your own project folder**, next to your scripts:
+
+- **Save as…** asks for a full path to a `.json` file. It suggests `<script library folder>\<pipeline name>.json`.
+- **Save** (Ctrl+S) writes back to the same file. The toolbar shows which file is open; hover over it to see the full path.
+- **Open…** lists recently used files, the examples, and *Open file by path…*.
+
+The recent list is stored in `~/.scriptgui/recent.json`, outside this repository. The editor also keeps the current pipeline in the browser's local storage, so a page reload doesn't lose work.
+Pipelines from older versions saved in `pipelines/` still appear under *Open…*. That folder is git-ignored.

@@ -57,6 +57,10 @@ input::placeholder { color: #6b6e78; }
 .name { width: 130px; font-weight: 600; }
 .dirty { color: var(--warn); visibility: hidden; font-size: 11px; }
 .dirty.on { visibility: visible; }
+.file-label {
+  color: var(--muted); font-size: 12px; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .run-status { margin-left: auto; color: var(--muted); white-space: nowrap; }
 .run-status.ok { color: var(--ok); }
 .run-status.fail { color: var(--fail); }

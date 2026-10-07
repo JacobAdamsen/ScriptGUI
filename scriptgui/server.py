@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -11,18 +12,19 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from . import runner
 from .models import Pipeline
 from .runner import PROJECT_ROOT, Runner, resolve
 
 STATIC_DIR = PROJECT_ROOT / "static"
-SAVED_DIR = PROJECT_ROOT / "pipelines"
+SAVED_DIR = PROJECT_ROOT / "pipelines"          # legacy save location, still listed under Open
 EXAMPLES_DIR = PROJECT_ROOT / "examples" / "pipelines"
+RECENT_FILE = Path.home() / ".scriptgui" / "recent.json"  # outside the repo on purpose
 SKIP_DIRS = {"__pycache__", "venv", "env", "node_modules", "site-packages"}
 NAME_RE = re.compile(r"^[\w\- .]+$")
-MAX_SCRIPTS, MAX_DEPTH = 500, 4
+MAX_SCRIPTS, MAX_DEPTH, MAX_RECENT = 500, 4, 10
 
 app = FastAPI(title="ScriptGUI")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -95,13 +97,69 @@ def load_pipeline(source: str, name: str) -> Pipeline:
     return Pipeline.model_validate_json(f.read_text("utf-8"))
 
 
-@app.put("/api/pipelines/{name}")
-def save_pipeline(name: str, pipeline: Pipeline):
-    f = pipeline_file("saved", name)
-    SAVED_DIR.mkdir(exist_ok=True)
-    pipeline.name = name
-    f.write_text(pipeline.model_dump_json(indent=2), "utf-8")
-    return {"source": "saved", "name": name, "path": str(f)}
+# ---------------------------------------------------------------- pipelines saved anywhere
+
+def read_recent() -> list[str]:
+    try:
+        data = json.loads(RECENT_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
+
+
+def remember(path: Path) -> None:
+    key = os.path.normcase(str(path))
+    items = [str(path)] + [p for p in read_recent() if os.path.normcase(p) != key]
+    try:
+        RECENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECENT_FILE.write_text(json.dumps(items[:MAX_RECENT], indent=2), "utf-8")
+    except OSError:
+        pass  # the recent list is a convenience only
+
+
+def json_path(p: str) -> Path:
+    if not p.strip():
+        raise HTTPException(400, "No file path given")
+    path = resolve(p.strip().strip('"'))
+    if path.suffix.lower() != ".json":
+        raise HTTPException(400, f"Pipeline files must end with .json: {path}")
+    return path
+
+
+@app.get("/api/recent")
+def recent_pipelines():
+    return [
+        {"path": p, "name": Path(p).name, "folder": Path(p).parent.name, "exists": Path(p).is_file()}
+        for p in read_recent()
+    ]
+
+
+@app.get("/api/pipeline-file")
+def load_pipeline_file(path: str):
+    f = json_path(path)
+    if not f.is_file():
+        raise HTTPException(404, f"File not found: {f}")
+    try:
+        pipeline = Pipeline.model_validate_json(f.read_text("utf-8"))
+    except ValidationError as e:
+        raise HTTPException(400, f"Not a valid pipeline file: {f}\n{e}")
+    remember(f)
+    return {"path": str(f), "pipeline": pipeline}
+
+
+class SaveRequest(BaseModel):
+    path: str
+    pipeline: Pipeline
+
+
+@app.put("/api/pipeline-file")
+def save_pipeline_file(req: SaveRequest):
+    f = json_path(req.path)
+    if not f.parent.is_dir():
+        raise HTTPException(400, f"Folder not found: {f.parent}")
+    f.write_text(req.pipeline.model_dump_json(indent=2), "utf-8")
+    remember(f)
+    return {"path": str(f)}
 
 
 @app.post("/api/validate")
