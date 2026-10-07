@@ -50,11 +50,13 @@ def safe_name(s: str) -> str:
 
 
 def workdir(p: Pipeline) -> Path:
-    return resolve(p.workdir or f"runs/{safe_name(p.name)}")
-
-
-def node_dir(p: Pipeline, node: Node) -> Path:
-    return workdir(p) / safe_name(node.label or node.id)
+    """Output folder: as set, else the folder the pipeline file is saved in,
+    else (unsaved pipeline) runs/<name> inside ScriptGUI."""
+    if p.workdir.strip():
+        return resolve(p.workdir)
+    if p.file.strip():
+        return resolve(p.file).parent
+    return PROJECT_ROOT / "runs" / safe_name(p.name)
 
 
 def python_exe(p: Pipeline) -> str:
@@ -62,14 +64,14 @@ def python_exe(p: Pipeline) -> str:
 
 
 def resolve_paths(p: Pipeline) -> Paths:
-    """Output ports live in <workdir>/<node label>/. Connected inputs take the upstream
-    output path; unconnected inputs use the path entered by the user."""
+    """Output ports are <workdir>/<path> (an absolute path is used as is). Connected inputs
+    take the upstream output path; unconnected inputs use the path entered by the user."""
     out: Paths = {}
+    wd = workdir(p)
     for n in p.nodes:
-        d = node_dir(p, n)
         out[n.id] = {
             "inputs": {},
-            "outputs": {pt.name: d / (pt.path.strip() or pt.name) for pt in n.outputs},
+            "outputs": {pt.name: wd / (pt.path.strip() or pt.name) for pt in n.outputs},
         }
     incoming = {(e.target, e.target_port): e for e in p.edges}
     for n in p.nodes:

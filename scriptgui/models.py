@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class Port(BaseModel):
     """A file argument. For inputs, `path` is only used when nothing is connected.
-    For outputs, `path` is the file name inside the node's output folder."""
+    For outputs, `path` is relative to the pipeline's output folder (or absolute)."""
     name: str
     path: str = ""
 
@@ -39,7 +39,8 @@ class Edge(BaseModel):
 class Pipeline(BaseModel):
     name: str = "untitled"
     python: str = ""          # empty = the interpreter running the server
-    workdir: str = ""         # empty = runs/<name>
+    workdir: str = ""         # output folder; empty = the folder of the pipeline file
+    file: str = ""            # where the pipeline .json is saved (set by the editor, not stored in the file)
     scripts_dir: str = "examples/scripts"
     nodes: list[Node] = Field(default_factory=list)
     edges: list[Edge] = Field(default_factory=list)

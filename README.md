@@ -34,7 +34,9 @@ Each node runs as:
 <python> -u <script> --<input> <path> ... --<output> <path> ... --<param> <value> ...
 ```
 
-- Outputs are written to `<output dir>/<node label>/<file name>`. The output dir defaults to `runs/<pipeline name>`.
+- Outputs are written to `<output dir>\<path>`, e.g. `predicted.ply` or `Meshes\torso.stl`. A full path (`C:\...`) is used as is.
+- **Output dir** (toolbar, 📁 to browse): when empty, outputs go to the folder the pipeline `.json` is saved in.
+  For a pipeline that hasn't been saved yet, they go to `runs\<pipeline name>` inside ScriptGUI. Hover over the field to see the folder in use.
 - Scripts run with their own folder as the working directory.
 - Relative paths are relative to this project folder.
 - The **Python** field lets you use another interpreter, e.g. a project venv's `python.exe`.

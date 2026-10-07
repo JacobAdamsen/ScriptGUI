@@ -64,7 +64,7 @@ const labelOf = (id) => state.pipeline.nodes.find((n) => n.id === id)?.label || 
 const basename = (p) => p.split(/[\\/]/).pop();
 
 function blankPipeline(name = "untitled") {
-  return { name, python: "", workdir: "", scripts_dir: "examples/scripts", nodes: [], edges: [] };
+  return { name, python: "", workdir: "", file: "", scripts_dir: "examples/scripts", nodes: [], edges: [] };
 }
 
 function normalize(p) {
@@ -93,6 +93,8 @@ function setFile(path) {
   const label = $("#file-label");
   label.textContent = state.file ? basename(state.file) : "not saved yet";
   label.title = state.file || "Use Save as… to choose where this pipeline is saved";
+  // The server needs it too: an empty Output dir means "the folder of the pipeline file".
+  if (state.pipeline) state.pipeline.file = state.file || "";
 }
 
 // ---------------------------------------------------------------- editor
@@ -131,7 +133,6 @@ function setPipeline(p, dirty = false, file = null) {
   $("#pipe-python").value = state.pipeline.python;
   $("#pipe-workdir").value = state.pipeline.workdir;
   $("#scripts-dir").value = state.pipeline.scripts_dir;
-  updateWorkdirPlaceholder();
   editor.setPipeline(state.pipeline);
   requestAnimationFrame(() => editor.fit());
   setDirty(dirty);
@@ -143,8 +144,13 @@ function setPipeline(p, dirty = false, file = null) {
   persist();
 }
 
-function updateWorkdirPlaceholder() {
-  $("#pipe-workdir").placeholder = `runs/${state.pipeline.name || "untitled"}`;
+/** Show where outputs will actually go (from the server's last analysis). */
+function showWorkdir(resolved) {
+  const input = $("#pipe-workdir");
+  input.placeholder = resolved;
+  input.title = state.pipeline.workdir
+    ? `Outputs are saved in: ${resolved}`
+    : `Empty = the folder of the saved pipeline file. Outputs are saved in: ${resolved}`;
 }
 
 // ---------------------------------------------------------------- validation + command preview
@@ -163,6 +169,7 @@ async function analyze() {
     if (seq !== analyzeSeq) return res;   // a newer request is on its way
     state.issues = res.issues;
     state.commands = res.commands;
+    showWorkdir(res.workdir);
     editor.setErrors(res.issues.filter((i) => i.level === "error" && i.node).map((i) => i.node));
     const pre = $("#cmd-preview");
     const sel = editor.selection;
@@ -306,7 +313,7 @@ function nodeInspector(node) {
   };
   const outputCol = (port) => h("input", {
     value: port.path, placeholder: port.name, spellcheck: "false",
-    title: "File name inside this node's output folder",
+    title: "File or folder name inside the Output dir, e.g. predicted.ply or Meshes\\torso.stl (a full C:\\... path also works)",
     oninput: (ev) => { port.path = ev.target.value; modelChanged(); },
   });
   const paramCol = (prm) => h("input", {
@@ -316,10 +323,10 @@ function nodeInspector(node) {
 
   return [
     h("h2", {}, "Node"),
-    textField("Label (also the output folder name)", node.label, (v) => { node.label = v; modelChanged(); }),
+    textField("Label", node.label, (v) => { node.label = v; modelChanged(); }),
     textField("Script", node.script, (v) => { node.script = v; modelChanged(); }),
     itemSection(node, "in", "Inputs", ["argument", "source / file path"], inputCol),
-    itemSection(node, "out", "Outputs", ["argument", "file name"], outputCol),
+    itemSection(node, "out", "Outputs", ["argument", "path in output dir"], outputCol),
     itemSection(node, "param", "Parameters", ["argument", "value"], paramCol),
     h("h2", {}, "Command"),
     h("pre", { class: "cmd", id: "cmd-preview" }, state.commands[node.id] ?? "…"),
@@ -420,8 +427,9 @@ function pipelineInfo() {
       "ap.add_argument(\"--out_csv\")\n" +
       "ap.add_argument(\"--threshold\", type=float)\n" +
       "args = ap.parse_args()"),
-    h("p", { class: "hint" }, "Outputs are written to ", h("code", {}, "<output dir>/<node label>/<file name>"),
-      ". Scripts run with their own folder as the working directory."),
+    h("p", { class: "hint" }, "Outputs are written to ", h("code", {}, "<output dir>\\<path>"),
+      ". An empty Output dir means the folder the pipeline file is saved in. ",
+      "Scripts run with their own folder as the working directory."),
     h("h2", {}, "Shortcuts"),
     h("p", { class: "hint" },
       h("span", { class: "kbd" }, "Del"), " delete selection  ·  ",
@@ -656,6 +664,7 @@ async function writeFile(path) {
     setDirty(false);
     persist();
     loadPipelineList();
+    analyze();   // the default output folder may have changed with the file location
     toast(`Saved to ${res.path}`);
   } catch (e) {
     toast(`Save failed: ${e.message}`);
@@ -765,9 +774,19 @@ function bindUI() {
   };
   $("#btn-save").onclick = save;
   $("#btn-save-as").onclick = saveAs;
-  $("#pipe-name").oninput = (ev) => { state.pipeline.name = ev.target.value; updateWorkdirPlaceholder(); changed(); };
+  $("#pipe-name").oninput = (ev) => { state.pipeline.name = ev.target.value; changed(); };
   $("#pipe-python").oninput = (ev) => { state.pipeline.python = ev.target.value; changed(); };
   $("#pipe-workdir").oninput = (ev) => { state.pipeline.workdir = ev.target.value; changed(); };
+  $("#btn-workdir").onclick = async () => {
+    try {
+      const res = await api("POST", "/api/dialog/folder", { initial_dir: $("#pipe-workdir").value || $("#pipe-workdir").placeholder });
+      if (!res.path) return;
+      $("#pipe-workdir").value = state.pipeline.workdir = res.path;
+      changed();
+    } catch (e) {
+      toast(`Could not open the folder dialog: ${e.message}`);
+    }
+  };
 
   $("#scripts-dir").onchange = (ev) => { state.pipeline.scripts_dir = ev.target.value; changed(); loadScripts(); };
   $("#btn-refresh").onclick = () => { state.pipeline.scripts_dir = $("#scripts-dir").value; loadScripts(); };

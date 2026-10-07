@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -153,47 +154,60 @@ class DialogRequest(BaseModel):
     initial_file: str = ""
 
 
+# Runs in a separate process: Tk must not live in the server's worker threads
+# (it can crash the server with "Tcl_AsyncDelete: async handler deleted by the wrong thread").
+DIALOG_SCRIPT = r'''
+import sys
+import tkinter as tk
+from tkinter import filedialog
+
+kind, initial_dir, initial_file = sys.argv[1:4]
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)  # don't open behind the browser
+root.update()
+opts = {"parent": root}
+if initial_dir:
+    opts["initialdir"] = initial_dir
+types = [("Pipeline files", "*.json"), ("All files", "*.*")]
+if kind == "save":
+    path = filedialog.asksaveasfilename(title="Save pipeline as", initialfile=initial_file,
+                                        filetypes=types, defaultextension=".json", **opts)
+elif kind == "folder":
+    path = filedialog.askdirectory(title="Choose output folder", mustexist=False, **opts)
+else:
+    path = filedialog.askopenfilename(title="Open pipeline", filetypes=types, **opts)
+root.destroy()
+sys.stdout.write(path or "")
+'''
+
 _dialog_lock = threading.Lock()
 
 
 def file_dialog(kind: str, initial_dir: str, initial_file: str) -> str | None:
-    """Show the native Windows Open / Save As dialog on this PC (the server runs locally)."""
-    import tkinter as tk
-    from tkinter import filedialog
-
+    """Show the native Windows Open / Save As / folder dialog on this PC (the server runs locally)."""
+    folder = resolve(initial_dir) if initial_dir else None
+    start = str(folder) if folder and folder.is_dir() else ""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}  # paths with æ/ø/å
     with _dialog_lock:
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)  # don't open behind the browser
-        root.update()
-        try:
-            opts = {
-                "parent": root,
-                "filetypes": [("Pipeline files", "*.json"), ("All files", "*.*")],
-                "defaultextension": ".json",
-            }
-            if initial_dir:
-                folder = resolve(initial_dir)
-                if folder.is_dir():
-                    opts["initialdir"] = str(folder)
-            if kind == "save":
-                path = filedialog.asksaveasfilename(title="Save pipeline as", initialfile=initial_file, **opts)
-            else:
-                path = filedialog.askopenfilename(title="Open pipeline", **opts)
-        finally:
-            root.destroy()
+        r = subprocess.run([sys.executable, "-c", DIALOG_SCRIPT, kind, start, initial_file],
+                           capture_output=True, text=True, encoding="utf-8", env=env)
+    if r.returncode != 0:
+        lines = r.stderr.strip().splitlines()
+        raise RuntimeError(lines[-1] if lines else "the file dialog failed")
+    path = r.stdout.strip()
     return str(Path(path)) if path else None
 
 
 @app.post("/api/dialog/{kind}")
 async def open_file_dialog(kind: str, req: DialogRequest):
     """Returns {"path": chosen path} or {"path": null} if the dialog was cancelled."""
-    if kind not in ("save", "open"):
+    if kind not in ("save", "open", "folder"):
         raise HTTPException(404, f"Unknown dialog '{kind}'")
     try:
         path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file)
-    except ImportError:
-        raise HTTPException(501, "tkinter is not available in this Python, so the file dialog can't be shown")
+    except RuntimeError as e:
+        raise HTTPException(501, f"Can't show the file dialog: {e}")
     return {"path": path}
 
 
@@ -207,7 +221,7 @@ def save_pipeline_file(req: SaveRequest):
     f = json_path(req.path)
     if not f.parent.is_dir():
         raise HTTPException(400, f"Folder not found: {f.parent}")
-    f.write_text(req.pipeline.model_dump_json(indent=2), "utf-8")
+    f.write_text(req.pipeline.model_dump_json(indent=2, exclude={"file"}), "utf-8")
     remember(f)
     return {"path": str(f)}
 
