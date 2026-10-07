@@ -68,9 +68,12 @@ args = ap.parse_args()
 
 A pipeline is a `.json` file that you keep **in your own project folder**, next to your scripts:
 
-- **Save as…** asks for a full path to a `.json` file. It suggests `<script library folder>\<pipeline name>.json`.
+- **Save as…** opens the normal Windows *Save As* window, starting in the script library folder.
 - **Save** (Ctrl+S) writes back to the same file. The toolbar shows which file is open; hover over it to see the full path.
-- **Open…** lists recently used files, the examples, and *Open file by path…*.
+- **Open…** lists recently used files and the examples. *Browse…* opens the normal Windows *Open* window.
+
+The dialogs are shown by the local server with Python's built-in tkinter, so they appear on the PC running ScriptGUI.
+If tkinter is missing, ScriptGUI asks you to type the path instead.
 
 The recent list is stored in `~/.scriptgui/recent.json`, outside this repository. The editor also keeps the current pipeline in the browser's local storage, so a page reload doesn't lose work.
 Pipelines from older versions saved in `pipelines/` still appear under *Open…*. That folder is git-ignored.

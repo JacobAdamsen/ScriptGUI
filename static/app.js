@@ -582,7 +582,7 @@ function finishRun() {
 async function loadPipelineList() {
   const sel = $("#sel-open");
   const [items, recent] = await Promise.all([api("GET", "/api/pipelines"), api("GET", "/api/recent")]);
-  sel.replaceChildren(h("option", { value: "" }, "Open…"), h("option", { value: "browse" }, "Open file by path…"));
+  sel.replaceChildren(h("option", { value: "" }, "Open…"), h("option", { value: "browse" }, "Browse…"));
   if (recent.length) {
     sel.append(h("optgroup", { label: "Recent" }, recent.map((r) =>
       h("option", { value: `file:${r.path}`, title: r.path, disabled: !r.exists },
@@ -622,12 +622,30 @@ async function openFile(path) {
 const cleanPath = (p) => p.trim().replace(/^"|"$/g, "");
 const isAbsolute = (p) => /^([A-Za-z]:[\\/]|\\\\|\/)/.test(p);
 
-function suggestedPath() {
-  if (state.file) return state.file;
-  const name = (state.pipeline.name || "untitled").replace(/[<>:"/\\|?*]/g, "_");
+const dirname = (p) => p.replace(/[\\/][^\\/]*$/, "");
+
+/** Folder and file name the dialogs start in: the open file, else the script library folder. */
+function dialogStart() {
+  if (state.file) return { dir: dirname(state.file), file: basename(state.file) };
+  const file = (state.pipeline.name || "untitled").replace(/[<>:"/\\|?*]/g, "_") + ".json";
   const dir = state.pipeline.scripts_dir.replace(/[\\/]+$/, "");
-  // Relative script folders live inside ScriptGUI, so suggest its git-ignored pipelines folder.
-  return isAbsolute(dir) ? `${dir}\\${name}.json` : `pipelines\\${name}.json`;
+  // Relative script folders live inside ScriptGUI, so start in its git-ignored pipelines folder.
+  return { dir: isAbsolute(dir) ? dir : "pipelines", file };
+}
+
+/** Show the Windows Save As / Open dialog (via the local server). Returns a path or null. */
+async function chooseFile(kind) {
+  const { dir, file } = dialogStart();
+  toast(kind === "save" ? "Choose where to save in the Windows dialog…" : "Choose a pipeline in the Windows dialog…");
+  try {
+    const res = await api("POST", `/api/dialog/${kind}`, { initial_dir: dir, initial_file: file });
+    $("#toast").classList.remove("show");
+    return res.path;
+  } catch (e) {
+    // No dialog available: fall back to typing the path.
+    const p = prompt(`${e.message}\n\nType the full path to a .json file:`, `${dir}\\${file}`);
+    return p ? cleanPath(p) : null;
+  }
 }
 
 async function writeFile(path) {
@@ -644,9 +662,14 @@ async function writeFile(path) {
   }
 }
 
-function saveAs() {
-  const path = prompt("Save pipeline as (full path to a .json file, e.g. in your project folder):", suggestedPath());
-  if (path && cleanPath(path)) writeFile(cleanPath(path));
+async function saveAs() {
+  const path = await chooseFile("save");
+  if (path) writeFile(path);
+}
+
+async function browseAndOpen() {
+  const path = await chooseFile("open");
+  if (path) openFile(path);
 }
 
 function save() {
@@ -665,8 +688,7 @@ function bindUI() {
     ev.target.value = "";
     if (!v || !confirmDiscard()) return;
     if (v === "browse") {
-      const path = prompt("Open pipeline (full path to a .json file):", state.file || "");
-      if (path && cleanPath(path)) openFile(cleanPath(path));
+      browseAndOpen();
     } else if (v.startsWith("file:")) {
       openFile(v.slice(5));
     } else {

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -145,6 +146,55 @@ def load_pipeline_file(path: str):
         raise HTTPException(400, f"Not a valid pipeline file: {f}\n{e}")
     remember(f)
     return {"path": str(f), "pipeline": pipeline}
+
+
+class DialogRequest(BaseModel):
+    initial_dir: str = ""
+    initial_file: str = ""
+
+
+_dialog_lock = threading.Lock()
+
+
+def file_dialog(kind: str, initial_dir: str, initial_file: str) -> str | None:
+    """Show the native Windows Open / Save As dialog on this PC (the server runs locally)."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    with _dialog_lock:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)  # don't open behind the browser
+        root.update()
+        try:
+            opts = {
+                "parent": root,
+                "filetypes": [("Pipeline files", "*.json"), ("All files", "*.*")],
+                "defaultextension": ".json",
+            }
+            if initial_dir:
+                folder = resolve(initial_dir)
+                if folder.is_dir():
+                    opts["initialdir"] = str(folder)
+            if kind == "save":
+                path = filedialog.asksaveasfilename(title="Save pipeline as", initialfile=initial_file, **opts)
+            else:
+                path = filedialog.askopenfilename(title="Open pipeline", **opts)
+        finally:
+            root.destroy()
+    return str(Path(path)) if path else None
+
+
+@app.post("/api/dialog/{kind}")
+async def open_file_dialog(kind: str, req: DialogRequest):
+    """Returns {"path": chosen path} or {"path": null} if the dialog was cancelled."""
+    if kind not in ("save", "open"):
+        raise HTTPException(404, f"Unknown dialog '{kind}'")
+    try:
+        path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file)
+    except ImportError:
+        raise HTTPException(501, "tkinter is not available in this Python, so the file dialog can't be shown")
+    return {"path": path}
 
 
 class SaveRequest(BaseModel):
