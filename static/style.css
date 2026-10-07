@@ -17,6 +17,10 @@
   --port-out: #ffb86b;
   --edge: #7f8495;
   --mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  --sidebar-size: 240px;     /* panel sizes; changed by dragging the splitters */
+  --inspector-size: 340px;
+  --log-size: 220px;
+  --splitter: 6px;
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 13px;
   color-scheme: dark;
@@ -24,7 +28,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
-body { display: grid; grid-template-rows: auto 1fr 220px; overflow: hidden; }
+body { display: grid; grid-template-rows: auto 1fr var(--splitter) var(--log-size); overflow: hidden; }
 
 button, input, select { font: inherit; color: inherit; }
 button {
@@ -67,10 +71,25 @@ input::placeholder { color: #6b6e78; }
 .run-status.running { color: var(--run); }
 
 /* ---------------------------------------------------------------- layout */
-.layout { display: grid; grid-template-columns: 240px 1fr 340px; min-height: 0; }
+.layout {
+  display: grid; min-height: 0;
+  grid-template-columns: var(--sidebar-size) var(--splitter) 1fr var(--splitter) var(--inspector-size);
+}
 .sidebar, .inspector { background: var(--panel); overflow: auto; padding: 12px; }
-.sidebar { border-right: 1px solid var(--border); }
-.inspector { border-left: 1px solid var(--border); }
+
+/* drag handles between panels; the thin line in the middle highlights on hover */
+.splitter { position: relative; background: var(--panel); touch-action: none; z-index: 2; }
+.splitter::after { content: ""; position: absolute; background: var(--border); transition: background .15s; }
+.splitter.v { cursor: col-resize; }
+.splitter.v::after { top: 0; bottom: 0; left: calc(50% - 0.5px); width: 1px; }
+.splitter.h { cursor: row-resize; }
+.splitter.h::after { left: 0; right: 0; top: calc(50% - 0.5px); height: 1px; }
+.splitter:hover::after, .splitter.active::after { background: var(--accent); }
+.splitter.v:hover::after, .splitter.v.active::after { left: calc(50% - 1.5px); width: 3px; }
+.splitter.h:hover::after, .splitter.h.active::after { top: calc(50% - 1.5px); height: 3px; }
+body.resizing { user-select: none; }
+body.resizing-col, body.resizing-col * { cursor: col-resize !important; }
+body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 h2 {
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
   color: var(--muted); margin: 4px 0 8px; display: flex; align-items: center; gap: 6px;
@@ -176,7 +195,7 @@ pre.cmd {
 .stat b { color: var(--text); }
 
 /* ---------------------------------------------------------------- log panel */
-.logpanel { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-top: 1px solid var(--border); }
+.logpanel { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
 .log-tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
 .log-tab {
   display: flex; align-items: center; gap: 7px; border: none; border-radius: 6px 6px 0 0;
@@ -207,7 +226,7 @@ pre.cmd {
 .issue .lvl.warning { color: var(--warn); }
 
 .toast {
-  position: fixed; left: 50%; bottom: 240px; transform: translate(-50%, 20px); opacity: 0;
+  position: fixed; left: 50%; bottom: calc(var(--log-size) + 20px); transform: translate(-50%, 20px); opacity: 0;
   background: #31343e; border: 1px solid #454956; padding: 8px 14px; border-radius: 8px;
   pointer-events: none; transition: opacity .2s, transform .2s; max-width: 60vw; z-index: 10;
 }

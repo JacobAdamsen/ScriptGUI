@@ -679,6 +679,73 @@ function save() {
 
 const confirmDiscard = () => !state.dirty || confirm("Discard unsaved changes to this pipeline?");
 
+// ---------------------------------------------------------------- resizable panels
+
+const LAYOUT_KEY = "scriptgui.layout";
+const PANEL_DEFAULTS = { sidebar: 240, inspector: 340, log: 220 };
+const PANEL_MIN = { sidebar: 160, inspector: 240, log: 80 };
+const MIN_CANVAS = 240;   // keep at least this much canvas visible
+const SPLITTER_PX = 6;    // matches --splitter in style.css
+
+function applyPanelSize(key, px) {
+  document.documentElement.style.setProperty(`--${key}-size`, `${px}px`);
+}
+
+function bindSplitters() {
+  const sizes = { ...PANEL_DEFAULTS };
+  try {
+    Object.assign(sizes, JSON.parse(localStorage.getItem(LAYOUT_KEY)) || {});
+  } catch { /* no saved layout */ }
+  const saveSizes = () => {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(sizes)); } catch { /* not critical */ }
+  };
+  const maxSize = (key) => key === "log"
+    ? window.innerHeight - 200
+    : window.innerWidth - MIN_CANVAS - 2 * SPLITTER_PX - sizes[key === "sidebar" ? "inspector" : "sidebar"];
+  const clamp = (key, px) => Math.round(Math.max(PANEL_MIN[key], Math.min(maxSize(key), px)));
+  const fitAll = () => {
+    for (const key of Object.keys(sizes)) applyPanelSize(key, (sizes[key] = clamp(key, sizes[key])));
+  };
+
+  fitAll();
+  window.addEventListener("resize", fitAll);   // a smaller window shrinks panels, not the canvas
+
+  for (const el of document.querySelectorAll(".splitter")) {
+    const key = el.dataset.split;
+    const horizontal = key === "log";
+    el.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      el.setPointerCapture(ev.pointerId);
+      el.classList.add("active");
+      document.body.classList.add("resizing", horizontal ? "resizing-row" : "resizing-col");
+      const start = { x: ev.clientX, y: ev.clientY, size: sizes[key] };
+      const move = (e) => {
+        // Panels grow away from the canvas: sidebar to the right, inspector to the left, log upwards.
+        const delta = key === "sidebar" ? e.clientX - start.x : key === "inspector" ? start.x - e.clientX : start.y - e.clientY;
+        sizes[key] = clamp(key, start.size + delta);
+        applyPanelSize(key, sizes[key]);
+      };
+      const up = () => {
+        el.removeEventListener("pointermove", move);
+        el.removeEventListener("pointerup", up);
+        el.removeEventListener("pointercancel", up);
+        el.classList.remove("active");
+        document.body.classList.remove("resizing", "resizing-row", "resizing-col");
+        saveSizes();
+      };
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
+    });
+    el.addEventListener("dblclick", () => {
+      sizes[key] = clamp(key, PANEL_DEFAULTS[key]);
+      applyPanelSize(key, sizes[key]);
+      saveSizes();
+    });
+  }
+}
+
 // ---------------------------------------------------------------- wiring
 
 function bindUI() {
@@ -751,6 +818,7 @@ function bindUI() {
   });
 
   bindCanvasDrop();
+  bindSplitters();
 }
 
 async function init() {
