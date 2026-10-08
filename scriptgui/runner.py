@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -235,6 +236,23 @@ def plan(p: Pipeline, start_node: str | None = None) -> list[str]:
 
 # ---------------------------------------------------------------- execution
 
+OUTPUT_GRACE_SECONDS = 0.5   # after a script exits, stop reading once its output has been quiet this long
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Kill a script and every process it started (subprocesses, multiprocessing workers, tools)."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)   # the script was started in its own process group
+        except ProcessLookupError:
+            pass
+    if proc.poll() is None:
+        proc.kill()
+
+
 class Runner:
     """Runs one pipeline at a time, streaming events through `emit`."""
 
@@ -246,7 +264,7 @@ class Runner:
         self._cancelled = True
         proc = self._proc
         if proc and proc.poll() is None:
-            proc.kill()
+            kill_tree(proc)
 
     async def run(self, p: Pipeline, emit: Emit, start_node: str | None = None) -> None:
         self._cancelled = False
@@ -297,6 +315,7 @@ class Runner:
         try:
             proc = subprocess.Popen(
                 cmd, cwd=resolve(node.script).parent, env=env, creationflags=flags,
+                start_new_session=sys.platform != "win32",   # own process group, so kill_tree gets children
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
             )
@@ -305,6 +324,8 @@ class Runner:
             await status("failed")
             return False
         self._proc = proc
+        if self._cancelled:   # Cancel arrived while this step was being set up
+            kill_tree(proc)
 
         # Read both pipes in threads (works with any event loop) and forward lines here.
         loop = asyncio.get_running_loop()
@@ -320,7 +341,14 @@ class Runner:
             threading.Thread(target=pump, args=(stream, name), daemon=True).start()
         open_streams = 2
         while open_streams:
-            name, line = await queue.get()
+            try:
+                name, line = await asyncio.wait_for(queue.get(), timeout=OUTPUT_GRACE_SECONDS)
+            except asyncio.TimeoutError:
+                # A program started by the script can keep the output open after the script
+                # itself has ended; don't let that keep the step "running" forever.
+                if proc.poll() is not None:
+                    break
+                continue
             if line is None:
                 open_streams -= 1
             else:
