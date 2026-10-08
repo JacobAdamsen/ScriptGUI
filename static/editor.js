@@ -1,6 +1,7 @@
 // SVG node editor: draws a pipeline's nodes and edges and handles pan, zoom, drag and connect.
 // It edits the pipeline object in place and reports through callbacks:
 //   onSelect(selection), onChange(), onRender(nodeCount), onMessage(text)
+import { basename, snap } from "./util.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 export const NODE_W = 220;
@@ -8,7 +9,6 @@ const HEAD_H = 44;
 const ROW0 = HEAD_H + 6;   // y of the first port row
 const ROW_H = 24;
 const PARAM_H = 20;
-const GRID = 10;
 
 function svg(tag, attrs = {}, parent = null) {
   const el = document.createElementNS(SVGNS, tag);
@@ -18,8 +18,6 @@ function svg(tag, attrs = {}, parent = null) {
 }
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-const basename = (p) => p.split(/[\\/]/).pop();
-const snap = (v) => Math.round(v / GRID) * GRID;
 
 function curve(a, b) {
   const dx = Math.max(50, Math.abs(b.x - a.x) * 0.5);
@@ -324,11 +322,11 @@ export class Editor {
     this.dragEdge.setAttribute("d", from.kind === "out" ? curve(anchor, w) : curve(w, anchor));
   }
 
-  _connectTarget(ev) {
+  /** The port under the pointer, if a connection from `from` may end there. */
+  _connectTarget(ev, from) {
     const t = document.elementFromPoint(ev.clientX, ev.clientY);
     if (!t?.classList?.contains("port")) return null;
     const to = { node: t.dataset.node, port: t.dataset.port, kind: t.dataset.kind, el: t };
-    const from = this.drag.from;
     return to.kind !== from.kind && to.node !== from.node ? to : null;
   }
 
@@ -352,7 +350,7 @@ export class Editor {
       }
     } else if (d.mode === "connect") {
       this._drawDragEdge(this.toWorld(ev.clientX, ev.clientY));
-      const target = this._connectTarget(ev);
+      const target = this._connectTarget(ev, d.from);
       if (this.hot !== target?.el) {
         this.hot?.classList.remove("hot");
         this.hot = target?.el ?? null;
@@ -372,9 +370,7 @@ export class Editor {
     this.dragEdge.setAttribute("d", "");
     this.hot?.classList.remove("hot");
     this.hot = null;
-    this.drag = d;   // _connectTarget reads drag.from
-    const to = this._connectTarget(ev);
-    this.drag = null;
+    const to = this._connectTarget(ev, d.from);
 
     let changed = d.detached;
     if (to) {

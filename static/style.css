@@ -69,6 +69,7 @@ button.icon { padding: 4px 7px; }
 .run-status { margin-left: auto; color: var(--muted); white-space: nowrap; }
 .run-status.ok { color: var(--ok); }
 .run-status.fail { color: var(--fail); }
+.run-status.warn { color: var(--warn); }
 .run-status.running { color: var(--run); }
 
 /* ---------------------------------------------------------------- layout */

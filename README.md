@@ -26,7 +26,8 @@ The demo pipeline (`examples/pipelines/demo.json`) loads on first start.
 2. **Inspector** (right): select a node and add
    - **Inputs**: files or folders the script reads. Connect one from another node, or set a path:
      type it, or use 📄 / 📁 to pick a file or folder in the Windows dialog.
-   - **Outputs**: files the script writes. The value is the file name.
+   - **Outputs**: files or folders the script writes, as a path inside the Output dir
+     (e.g. `predicted.ply`, `Meshes\torso.stl`, or `.` for the Output dir itself).
    - **Parameters**: other arguments (`--threshold 0.5`; leave the value empty for a bare flag).
 3. **Connect**: drag from an orange output dot to a blue input dot (either direction works).
    Drag an edge off an input to re-route it, or click it and press `Del`.
@@ -80,6 +81,7 @@ args = ap.parse_args()
 | `static/editor.js` | SVG node editor (pan, zoom, drag, connect) |
 | `static/app.js` | Toolbar, library, inspector, run controls, log panel |
 | `static/loglevels.js` | Log-line highlighting (error / warning levels, tracebacks) |
+| `static/util.js` | Small helpers shared by the editor and the app |
 | `examples/` | Three demo scripts and the demo pipeline |
 
 ## Saving pipelines
@@ -94,4 +96,4 @@ The dialogs are shown by the local server with Python's built-in tkinter, so the
 If tkinter is missing, ScriptGUI asks you to type the path instead.
 
 The recent list is stored in `~/.scriptgui/recent.json`, outside this repository. The editor also keeps the current pipeline in the browser's local storage, so a page reload doesn't lose work.
-Pipelines from older versions saved in `pipelines/` still appear under *Open…*. That folder is git-ignored.
+Older versions saved pipelines in ScriptGUI's own `pipelines/` folder (git-ignored); open such a file with *Browse…* and *Save as…* it into your project.

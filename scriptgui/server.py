@@ -5,7 +5,6 @@ import asyncio
 import ipaddress
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -24,11 +23,9 @@ from .models import Pipeline
 from .runner import PROJECT_ROOT, Runner, resolve
 
 STATIC_DIR = PROJECT_ROOT / "static"
-SAVED_DIR = PROJECT_ROOT / "pipelines"          # legacy save location, still listed under Open
 EXAMPLES_DIR = PROJECT_ROOT / "examples" / "pipelines"
 RECENT_FILE = Path.home() / ".scriptgui" / "recent.json"  # outside the repo on purpose
 SKIP_DIRS = {"__pycache__", "venv", "env", "node_modules", "site-packages"}
-NAME_RE = re.compile(r"^[\w\- .]+$")
 MAX_SCRIPTS, MAX_DEPTH, MAX_RECENT = 500, 4, 10
 
 app = FastAPI(title="ScriptGUI")
@@ -124,29 +121,19 @@ def list_scripts(dir: str = "examples/scripts", pipeline_file: str = ""):
     return {"dir": str(root), "scripts": scripts[:MAX_SCRIPTS]}
 
 
-def pipeline_file(source: str, name: str) -> Path:
-    if not NAME_RE.match(name):
-        raise HTTPException(400, "Pipeline names may only contain letters, digits, spaces, '-', '_' and '.'")
-    base = {"saved": SAVED_DIR, "example": EXAMPLES_DIR}.get(source)
-    if base is None:
-        raise HTTPException(404, f"Unknown source '{source}'")
-    return base / f"{name}.json"
+# ---------------------------------------------------------------- built-in examples
+
+@app.get("/api/examples")
+def list_examples():
+    return sorted(f.stem for f in EXAMPLES_DIR.glob("*.json"))
 
 
-@app.get("/api/pipelines")
-def list_pipelines():
-    items = []
-    for source, base in (("saved", SAVED_DIR), ("example", EXAMPLES_DIR)):
-        if base.is_dir():
-            items += [{"source": source, "name": f.stem} for f in sorted(base.glob("*.json"))]
-    return items
-
-
-@app.get("/api/pipelines/{source}/{name}")
-def load_pipeline(source: str, name: str) -> Pipeline:
-    f = pipeline_file(source, name)
-    if not f.is_file():
-        raise HTTPException(404, f"Pipeline not found: {name}")
+@app.get("/api/examples/{name}")
+def load_example(name: str) -> Pipeline:
+    """Examples open without a file, so Save asks where to save the user's copy."""
+    f = EXAMPLES_DIR / f"{name}.json"
+    if Path(name).name != name or not f.is_file():   # plain names only, no paths
+        raise HTTPException(404, f"Example not found: {name}")
     return Pipeline.model_validate_json(f.read_text("utf-8"))
 
 

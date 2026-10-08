@@ -233,8 +233,13 @@ def validate(p: Pipeline) -> list[Issue]:
             issues.append(Issue("error", f"Input '{port}' has {count} connections (max 1)", nid))
     for n in p.nodes:
         for pt in n.inputs:
-            if (n.id, pt.name) not in incoming and not pt.path.strip():
+            if (n.id, pt.name) in incoming:
+                continue
+            if not pt.path.strip():
                 issues.append(Issue("error", f"Input '{pt.name}' is not connected and has no file path", n.id))
+            elif not rel(p, pt.path).exists():
+                # Only a warning while editing (the file may be created later); Run treats it as an error.
+                issues.append(Issue("warning", f"Input '{pt.name}': file not found: {rel(p, pt.path)}", n.id))
 
     try:
         topo_order(p)

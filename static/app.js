@@ -1,6 +1,7 @@
 // App shell: toolbar, script library, inspector, run controls and log panel.
 import { Editor, NODE_W } from "./editor.js";
 import { createClassifier } from "./loglevels.js";
+import { basename, snap } from "./util.js";
 
 const $ = (sel) => document.querySelector(sel);
 const STORAGE_KEY = "scriptgui.current";
@@ -64,7 +65,6 @@ function toast(msg) {
 }
 
 const labelOf = (id) => state.pipeline.nodes.find((n) => n.id === id)?.label || id;
-const basename = (p) => p.split(/[\\/]/).pop();
 
 function blankPipeline(name = "untitled") {
   return { name, python: "", workdir: "", file: "", scripts_dir: "examples/scripts", nodes: [], edges: [] };
@@ -253,8 +253,8 @@ function addScriptNode(path, x, y) {
     id: uniqueId(),
     label: uniqueLabel(basename(path).replace(/\.py$/i, "")),
     script: path,
-    x: Math.round(x / 10) * 10,
-    y: Math.round(y / 10) * 10,
+    x: snap(x),
+    y: snap(y),
     inputs: [],
     outputs: [],
     params: [],
@@ -329,8 +329,10 @@ function nodeInspector(node) {
       oninput: (ev) => { port.path = ev.target.value; ev.target.title = port.path; modelChanged(); },
     });
     const browse = async (kind) => {
-      const path = await pickPath(kind, port.path || state.pipeline.scripts_dir,
-        `Choose ${kind === "folder" ? "folder" : "file"} for --${port.name}`);
+      const path = await showDialog(kind, {
+        start: port.path || state.pipeline.scripts_dir, relative: true,
+        title: `Choose ${kind === "folder" ? "folder" : "file"} for --${port.name}`,
+      });
       if (!path) return;
       port.path = input.value = input.title = path;
       modelChanged();
@@ -668,30 +670,26 @@ function finishRun() {
 
 // ---------------------------------------------------------------- open / save
 
-// Open… values: "file:<full path>", "example:<name>", "saved:<name>" (old ScriptGUI/pipelines) or "browse".
+// Open… values: "browse", "file:<full path>" (recent files) or "example:<name>".
 async function loadPipelineList() {
   const sel = $("#sel-open");
-  const [items, recent] = await Promise.all([api("GET", "/api/pipelines"), api("GET", "/api/recent")]);
+  const [examples, recent] = await Promise.all([api("GET", "/api/examples"), api("GET", "/api/recent")]);
   sel.replaceChildren(h("option", { value: "" }, "Open…"), h("option", { value: "browse" }, "Browse…"));
   if (recent.length) {
     sel.append(h("optgroup", { label: "Recent" }, recent.map((r) =>
       h("option", { value: `file:${r.path}`, title: r.path, disabled: !r.exists },
         `${r.name}  (${r.folder})${r.exists ? "" : "  missing"}`))));
   }
-  const groups = [["example", "Examples"], ["saved", "In the ScriptGUI folder"]];
-  for (const [source, title] of groups) {
-    const group = items.filter((i) => i.source === source);
-    if (group.length) {
-      sel.append(h("optgroup", { label: title }, group.map((i) => h("option", { value: `${source}:${i.name}` }, i.name))));
-    }
+  if (examples.length) {
+    sel.append(h("optgroup", { label: "Examples" }, examples.map((name) => h("option", { value: `example:${name}` }, name))));
   }
   sel.value = "";
 }
 
-async function openPipeline(source, name) {
+async function openExample(name) {
   try {
-    // Examples and old ScriptGUI-folder files open without a file, so Save asks where to save.
-    setPipeline(await api("GET", `/api/pipelines/${source}/${encodeURIComponent(name)}`));
+    // Examples open without a file, so Save asks where to save your copy.
+    setPipeline(await api("GET", `/api/examples/${encodeURIComponent(name)}`));
     setRunStatus("");
   } catch (e) {
     toast(`Could not open ${name}: ${e.message}`);
@@ -723,36 +721,30 @@ function dialogStart() {
   return { dir: isAbsolute(dir) ? dir : "pipelines", file };
 }
 
-/** Windows file or folder picker (via the local server), starting at `current` (a file or folder).
- *  Returns the chosen path (relative to the pipeline's folder when inside it), or null. */
-async function pickPath(kind, current, title) {
+/**
+ * Show a Windows dialog (opened by the local server) and return the chosen path, or null.
+ *   kind:     "save" / "open" (pipeline .json files), "file" (any file) or "folder"
+ *   start:    file or folder to start in (relative = relative to the pipeline's folder)
+ *   file:     file name to suggest (Save as…)
+ *   relative: return the path relative to the pipeline's folder when it is inside it
+ *   typed:    if no dialog can be shown, ask for the path with this text (else just report it)
+ */
+async function showDialog(kind, { start = "", file = "", title = "", relative = false, typed = null } = {}) {
+  // In the file picker, preselect the current file, but not a folder name (no extension).
+  if (kind === "file" && !file && /\.\w+$/.test(basename(start))) file = basename(start);
+  toast("Choose in the Windows dialog…");   // it can open behind the browser window
   try {
     const res = await api("POST", `/api/dialog/${kind}`, {
-      // Preselect the current file in the file dialog, but not a folder name (no extension).
-      initial_dir: current || "",
-      initial_file: kind === "file" && current && /\.\w+$/.test(basename(current)) ? basename(current) : "",
-      title,
-      pipeline_file: state.file || "",
-      relative: true,
+      initial_dir: start, initial_file: file, title, pipeline_file: state.file || "", relative,
     });
-    return res.path;
-  } catch (e) {
-    toast(`Could not open the ${kind === "folder" ? "folder" : "file"} dialog: ${e.message}`);
-    return null;
-  }
-}
-
-/** Show the Windows Save As / Open dialog (via the local server). Returns a path or null. */
-async function chooseFile(kind) {
-  const { dir, file } = dialogStart();
-  toast(kind === "save" ? "Choose where to save in the Windows dialog…" : "Choose a pipeline in the Windows dialog…");
-  try {
-    const res = await api("POST", `/api/dialog/${kind}`, { initial_dir: dir, initial_file: file, pipeline_file: state.file || "" });
     $("#toast").classList.remove("show");
     return res.path;
   } catch (e) {
-    // No dialog available: fall back to typing the path.
-    const p = prompt(`${e.message}\n\nType the full path to a .json file:`, `${dir}\\${file}`);
+    if (!typed) {
+      toast(`Could not open the dialog: ${e.message}`);
+      return null;
+    }
+    const p = prompt(`${e.message}\n\n${typed}`, file ? `${start}\\${file}` : start);
     return p ? cleanPath(p) : null;
   }
 }
@@ -796,12 +788,13 @@ function applyRebased(p) {
 }
 
 async function saveAs() {
-  const path = await chooseFile("save");
+  const { dir, file } = dialogStart();
+  const path = await showDialog("save", { start: dir, file, typed: "Type the full path to a .json file:" });
   if (path) writeFile(path);
 }
 
 async function browseAndOpen() {
-  const path = await chooseFile("open");
+  const path = await showDialog("open", { start: dialogStart().dir, typed: "Type the full path to a .json file:" });
   if (path) openFile(path);
 }
 
@@ -891,9 +884,8 @@ function bindUI() {
       browseAndOpen();
     } else if (v.startsWith("file:")) {
       openFile(v.slice(5));
-    } else {
-      const i = v.indexOf(":");
-      openPipeline(v.slice(0, i), v.slice(i + 1));
+    } else if (v.startsWith("example:")) {
+      openExample(v.slice(8));
     }
   };
   $("#btn-save").onclick = save;
@@ -902,7 +894,9 @@ function bindUI() {
   $("#pipe-python").oninput = (ev) => { state.pipeline.python = ev.target.value; changed(); };
   $("#pipe-workdir").oninput = (ev) => { state.pipeline.workdir = ev.target.value; changed(); };
   $("#btn-workdir").onclick = async () => {
-    const path = await pickPath("folder", $("#pipe-workdir").value || $("#pipe-workdir").placeholder, "Choose output folder");
+    const path = await showDialog("folder", {
+      start: $("#pipe-workdir").value || $("#pipe-workdir").placeholder, title: "Choose output folder", relative: true,
+    });
     if (!path) return;
     $("#pipe-workdir").value = state.pipeline.workdir = path;
     changed();
@@ -911,7 +905,7 @@ function bindUI() {
   $("#scripts-dir").onchange = (ev) => { state.pipeline.scripts_dir = ev.target.value; changed(); loadScripts(); };
   $("#btn-refresh").onclick = () => { state.pipeline.scripts_dir = $("#scripts-dir").value; loadScripts(); };
   const addByPath = () => {
-    const path = $("#add-path").value.trim().replace(/^"|"$/g, "");
+    const path = cleanPath($("#add-path").value);
     if (!path) return;
     addScriptNode(path);
     $("#add-path").value = "";
@@ -922,8 +916,10 @@ function bindUI() {
   $("#btn-validate").onclick = async () => {
     const res = await analyze();
     if (!res) return;
-    const n = res.issues.length;
-    setRunStatus(n ? `${n} problem${n > 1 ? "s" : ""} found` : "✔ No problems found", n ? "fail" : "ok");
+    const errors = res.issues.filter((i) => i.level === "error").length;
+    const warnings = res.issues.length - errors;
+    const parts = [errors && plural(errors, "error"), warnings && plural(warnings, "warning")].filter(Boolean);
+    setRunStatus(parts.length ? `${parts.join(", ")} found` : "✔ No problems found", errors ? "fail" : warnings ? "warn" : "ok");
     state.logTab = "issues";
     renderLogTabs();
     renderLogs();
@@ -969,7 +965,7 @@ async function init() {
   } catch { /* ignore */ }
   if (restored?.pipeline) return setPipeline(restored.pipeline, restored.dirty, restored.file);
   try {
-    setPipeline(await api("GET", "/api/pipelines/example/demo"));
+    setPipeline(await api("GET", "/api/examples/demo"));
   } catch {
     setPipeline(blankPipeline());
   }
