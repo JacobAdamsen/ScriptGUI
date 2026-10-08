@@ -10,11 +10,13 @@ import sys
 import threading
 from dataclasses import asdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import runner
 from .models import Pipeline
@@ -30,6 +32,31 @@ MAX_SCRIPTS, MAX_DEPTH, MAX_RECENT = 500, 4, 10
 
 app = FastAPI(title="ScriptGUI")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# ---------------------------------------------------------------- security
+# ScriptGUI runs programs on this PC, so only its own page may talk to it:
+# - Host check: blocks DNS-rebinding pages that pretend to be 127.0.0.1.
+# - Origin check: blocks other websites open in the browser (WebSockets are not
+#   covered by the browser's same-origin protection, so /ws/run checks it itself).
+LOCAL_HOSTS = ["127.0.0.1", "localhost"]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
+
+
+def same_origin(headers) -> bool:
+    """True unless a browser says the request comes from another site. Requests without an
+    Origin header (same-page GETs, scripts, curl) can't be made by other websites' pages."""
+    origin = headers.get("origin")
+    if origin is None:
+        return True
+    o = urlsplit(origin)
+    return o.scheme == "http" and o.hostname in LOCAL_HOSTS and o.netloc == headers.get("host")
+
+
+@app.middleware("http")
+async def reject_cross_site(request, call_next):
+    if not same_origin(request.headers):
+        return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -255,6 +282,9 @@ def validate_pipeline(pipeline: Pipeline):
 async def ws_run(ws: WebSocket):
     """Client sends {"action": "run", "pipeline": {...}, "start_node": id|null} or
     {"action": "cancel"}; the server streams runner events back as JSON."""
+    if not same_origin(ws.headers):
+        await ws.close(code=1008)  # policy violation: another website tried to connect
+        return
     await ws.accept()
     run = Runner()
     task: asyncio.Task | None = None
