@@ -12,6 +12,10 @@ python run.py
 ```
 
 The editor opens at http://127.0.0.1:8765. Options: `--port 9000`, `--no-browser`.
+
+**Security:** ScriptGUI runs programs on your PC, so it only listens on `127.0.0.1` (there is no `--host` option),
+accepts connections from this PC only, and refuses requests from other websites open in your browser.
+Only open pipeline files you trust: running a pipeline runs the scripts and Python interpreter it names.
 The demo pipeline (`examples/pipelines/demo.json`) loads on first start.
 
 ## How it works

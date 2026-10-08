@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 import re
@@ -35,6 +36,8 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # ---------------------------------------------------------------- security
 # ScriptGUI runs programs on this PC, so only its own page may talk to it:
+# - Client check: only connections from this PC, even if the server was started on a
+#   network address (run.py never does that, but e.g. `uvicorn --host 0.0.0.0` would).
 # - Host check: blocks DNS-rebinding pages that pretend to be 127.0.0.1.
 # - Origin check: blocks other websites open in the browser (WebSockets are not
 #   covered by the browser's same-origin protection, so /ws/run checks it itself).
@@ -52,8 +55,23 @@ def same_origin(headers) -> bool:
     return o.scheme == "http" and o.hostname in LOCAL_HOSTS and o.netloc == headers.get("host")
 
 
+def is_local_client(client) -> bool:
+    """True if the connection comes from this PC (a loopback address)."""
+    if client is None:
+        return False
+    try:
+        addr = ipaddress.ip_address(client.host)
+    except ValueError:
+        return False
+    if getattr(addr, "ipv4_mapped", None):   # ::ffff:127.0.0.1
+        addr = addr.ipv4_mapped
+    return addr.is_loopback
+
+
 @app.middleware("http")
 async def reject_cross_site(request, call_next):
+    if not is_local_client(request.client):
+        return JSONResponse({"detail": "Only connections from this PC are allowed"}, status_code=403)
     if not same_origin(request.headers):
         return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
     return await call_next(request)
@@ -282,8 +300,8 @@ def validate_pipeline(pipeline: Pipeline):
 async def ws_run(ws: WebSocket):
     """Client sends {"action": "run", "pipeline": {...}, "start_node": id|null} or
     {"action": "cancel"}; the server streams runner events back as JSON."""
-    if not same_origin(ws.headers):
-        await ws.close(code=1008)  # policy violation: another website tried to connect
+    if not is_local_client(ws.client) or not same_origin(ws.headers):
+        await ws.close(code=1008)  # policy violation: another computer or website tried to connect
         return
     await ws.accept()
     run = Runner()
