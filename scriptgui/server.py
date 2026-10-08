@@ -91,17 +91,23 @@ def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-def display_path(path: Path) -> str:
-    """Paths inside the project are stored relative to it, so pipelines stay portable."""
+def pipeline_base(pipeline_file: str) -> Path:
+    """Folder that relative paths are relative to: the pipeline file's folder (see runner.base_dir)."""
+    return resolve(pipeline_file).parent if pipeline_file.strip() else PROJECT_ROOT
+
+
+def display_path(path: Path, base: Path) -> str:
+    """Paths inside the pipeline's folder are stored relative to it, so the folder stays portable."""
     try:
-        return path.relative_to(PROJECT_ROOT).as_posix()
+        return str(path.relative_to(base))
     except ValueError:
         return str(path)
 
 
 @app.get("/api/scripts")
-def list_scripts(dir: str = "examples/scripts"):
-    root = resolve(dir or ".")
+def list_scripts(dir: str = "examples/scripts", pipeline_file: str = ""):
+    base = pipeline_base(pipeline_file)
+    root = resolve(dir or ".", base)
     if not root.is_dir():
         raise HTTPException(404, f"Folder not found: {root}")
     scripts = []
@@ -112,7 +118,7 @@ def list_scripts(dir: str = "examples/scripts"):
             dirs[:] = []
         for f in sorted(files):
             if f.endswith(".py"):
-                scripts.append({"name": (rel / f).as_posix(), "path": display_path(Path(current) / f)})
+                scripts.append({"name": (rel / f).as_posix(), "path": display_path(Path(current) / f, base)})
         if len(scripts) >= MAX_SCRIPTS:
             break
     return {"dir": str(root), "scripts": scripts[:MAX_SCRIPTS]}
@@ -198,6 +204,8 @@ class DialogRequest(BaseModel):
     initial_dir: str = ""     # a folder, or a file whose folder is used
     initial_file: str = ""
     title: str = ""
+    pipeline_file: str = ""   # relative initial_dir is relative to this file's folder
+    relative: bool = False    # return the choice relative to that folder when it is inside it
 
 
 # Runs in a separate process: Tk must not live in the server's worker threads
@@ -235,11 +243,12 @@ DIALOG_KINDS = ("save", "open", "file", "folder")
 _dialog_lock = threading.Lock()
 
 
-def file_dialog(kind: str, initial_dir: str, initial_file: str, title: str = "") -> str | None:
+def file_dialog(kind: str, initial_dir: str, initial_file: str, title: str = "",
+                base: Path = PROJECT_ROOT) -> str | None:
     """Show the native Windows Open / Save As / folder dialog on this PC (the server runs locally)."""
     start = ""
     if initial_dir.strip():
-        folder = resolve(initial_dir)
+        folder = resolve(initial_dir, base)
         if folder.is_file():
             folder = folder.parent
         if folder.is_dir():
@@ -260,10 +269,13 @@ async def open_file_dialog(kind: str, req: DialogRequest):
     """Returns {"path": chosen path} or {"path": null} if the dialog was cancelled."""
     if kind not in DIALOG_KINDS:
         raise HTTPException(404, f"Unknown dialog '{kind}'")
+    base = pipeline_base(req.pipeline_file)
     try:
-        path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file, req.title)
+        path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file, req.title, base)
     except RuntimeError as e:
         raise HTTPException(501, f"Can't show the file dialog: {e}")
+    if path and req.relative and req.pipeline_file.strip():
+        path = display_path(Path(path), base)
     return {"path": path}
 
 
@@ -274,12 +286,15 @@ class SaveRequest(BaseModel):
 
 @app.put("/api/pipeline-file")
 def save_pipeline_file(req: SaveRequest):
+    """Save; when saved to another folder, relative paths are rewritten to keep pointing at
+    the same files, and the rewritten pipeline is returned so the editor can update."""
     f = json_path(req.path)
     if not f.parent.is_dir():
         raise HTTPException(400, f"Folder not found: {f.parent}")
+    rebased = runner.rebase(req.pipeline, f)
     f.write_text(req.pipeline.model_dump_json(indent=2, exclude={"file"}), "utf-8")
     remember(f)
-    return {"path": str(f)}
+    return {"path": str(f), "pipeline": req.pipeline if rebased else None}
 
 
 @app.post("/api/validate")

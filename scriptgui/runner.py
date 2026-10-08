@@ -39,10 +39,59 @@ class PlanError(Exception):
 
 # ---------------------------------------------------------------- paths
 
-def resolve(p: str) -> Path:
-    """Resolve a user-entered path; relative paths are relative to the project root."""
-    path = Path(os.path.expandvars(p.strip())).expanduser()
-    return path if path.is_absolute() else PROJECT_ROOT / path
+def expand(p: str) -> Path:
+    """A user-entered path with %VARS% and ~ expanded (still relative if it was)."""
+    return Path(os.path.expandvars(p.strip().strip('"'))).expanduser()
+
+
+def resolve(p: str, base: Path = PROJECT_ROOT) -> Path:
+    """Resolve a user-entered path; relative paths are relative to `base`. `..` is folded away."""
+    return Path(os.path.normpath(base / expand(p)))   # base is ignored if the path is absolute
+
+
+def base_dir(p: Pipeline) -> Path:
+    """What relative paths in a pipeline are relative to: the folder its .json is saved in.
+    Unsaved pipelines and the built-in examples use the ScriptGUI folder."""
+    return resolve(p.file).parent if p.file.strip() else PROJECT_ROOT
+
+
+def rel(p: Pipeline, path: str) -> Path:
+    """Resolve a path from pipeline `p` (input, script, output dir, ...)."""
+    return resolve(path, base_dir(p))
+
+
+MAX_UP_LEVELS = 2   # rebase keeps e.g. ..\..\scripts\x.py relative; further away becomes a full path
+
+
+def rebase(p: Pipeline, new_file: Path) -> bool:
+    """Before saving `p` as `new_file` in another folder: change its relative paths so they
+    still point at the same files. They stay relative when the target is inside the new folder
+    or at most two levels up; otherwise (or on another drive) they become full paths.
+    Returns True if anything changed."""
+    old_base, new_base = base_dir(p), new_file.parent
+    if os.path.normcase(old_base) == os.path.normcase(new_base):
+        return False
+
+    def fix(value: str) -> str:
+        if not value.strip() or expand(value).is_absolute():
+            return value
+        target = os.path.normpath(old_base / expand(value))
+        try:
+            relative = os.path.relpath(target, new_base)
+        except ValueError:   # different drive
+            return target
+        return relative if relative.split(os.sep).count("..") <= MAX_UP_LEVELS else target
+
+    before = p.model_dump()
+    p.workdir = fix(p.workdir)
+    p.scripts_dir = fix(p.scripts_dir)
+    if not is_command(p.python.strip()):
+        p.python = fix(p.python)
+    for n in p.nodes:
+        n.script = fix(n.script)
+        for pt in n.inputs:
+            pt.path = fix(pt.path)
+    return p.model_dump() != before
 
 
 def safe_name(s: str) -> str:
@@ -54,14 +103,22 @@ def workdir(p: Pipeline) -> Path:
     """Output folder: as set, else the folder the pipeline file is saved in,
     else (unsaved pipeline) runs/<name> inside ScriptGUI."""
     if p.workdir.strip():
-        return resolve(p.workdir)
+        return rel(p, p.workdir)
     if p.file.strip():
-        return resolve(p.file).parent
+        return base_dir(p)
     return PROJECT_ROOT / "runs" / safe_name(p.name)
 
 
+def is_command(value: str) -> bool:
+    """`python` or `py` is a command looked up on PATH; anything with a folder in it is a path."""
+    return not any(sep in value for sep in ("\\", "/"))
+
+
 def python_exe(p: Pipeline) -> str:
-    return p.python.strip() or sys.executable
+    value = p.python.strip().strip('"')
+    if not value:
+        return sys.executable
+    return value if is_command(value) else str(rel(p, value))
 
 
 def resolve_paths(p: Pipeline) -> Paths:
@@ -72,7 +129,7 @@ def resolve_paths(p: Pipeline) -> Paths:
     for n in p.nodes:
         out[n.id] = {
             "inputs": {},
-            "outputs": {pt.name: wd / (pt.path.strip() or pt.name) for pt in n.outputs},
+            "outputs": {pt.name: resolve(pt.path.strip() or pt.name, wd) for pt in n.outputs},
         }
     incoming = {(e.target, e.target_port): e for e in p.edges}
     for n in p.nodes:
@@ -81,12 +138,12 @@ def resolve_paths(p: Pipeline) -> Paths:
             if e and e.source in out and e.source_port in out[e.source]["outputs"]:
                 out[n.id]["inputs"][pt.name] = out[e.source]["outputs"][e.source_port]
             elif pt.path.strip():
-                out[n.id]["inputs"][pt.name] = resolve(pt.path)
+                out[n.id]["inputs"][pt.name] = rel(p, pt.path)
     return out
 
 
 def build_command(p: Pipeline, node: Node, paths: Paths) -> list[str]:
-    cmd = [python_exe(p), "-u", str(resolve(node.script))]
+    cmd = [python_exe(p), "-u", str(rel(p, node.script))]
     np = paths[node.id]
     for pt in node.inputs:
         if pt.name in np["inputs"]:
@@ -149,7 +206,7 @@ def validate(p: Pipeline) -> list[Issue]:
     for n in p.nodes:
         if not n.script.strip():
             issues.append(Issue("error", "No script set", n.id))
-        elif not resolve(n.script).is_file():
+        elif not rel(p, n.script).is_file():
             issues.append(Issue("error", f"Script not found: {n.script}", n.id))
         flags = [pt.name for pt in n.inputs + n.outputs] + [pr.name for pr in n.params]
         for f in flags:
@@ -314,7 +371,7 @@ class Runner:
         t0 = time.monotonic()
         try:
             proc = subprocess.Popen(
-                cmd, cwd=resolve(node.script).parent, env=env, creationflags=flags,
+                cmd, cwd=rel(p, node.script).parent, env=env, creationflags=flags,
                 start_new_session=sys.platform != "win32",   # own process group, so kill_tree gets children
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,

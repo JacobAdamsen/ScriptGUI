@@ -43,8 +43,13 @@ Each node runs as:
 - **Output dir** (toolbar, 📁 to browse): when empty, outputs go to the folder the pipeline `.json` is saved in.
   For a pipeline that hasn't been saved yet, they go to `runs\<pipeline name>` inside ScriptGUI. Hover over the field to see the folder in use.
 - Scripts run with their own folder as the working directory.
-- Relative paths are relative to this project folder.
-- The **Python** field lets you use another interpreter, e.g. a project venv's `python.exe`.
+- **Relative paths** (inputs, scripts, Output dir, Script library, Python) are relative to the folder the
+  pipeline `.json` is saved in, so a project folder can be moved or shared as a whole. Outputs are relative
+  to the Output dir. Unsaved pipelines and the built-in examples use the ScriptGUI folder instead.
+  Scripts from the library and paths picked with 📄 / 📁 are stored relative when they're inside that folder.
+  *Save as…* to another folder rewrites relative paths so they keep pointing at the same files.
+- The **Python** field lets you use another interpreter, e.g. a project venv's `python.exe`
+  (a plain command like `python` is looked up on PATH).
 
 ### Script contract
 

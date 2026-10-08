@@ -189,7 +189,8 @@ async function loadScripts() {
   const list = $("#script-list");
   list.replaceChildren();
   try {
-    const res = await api("GET", "/api/scripts?dir=" + encodeURIComponent($("#scripts-dir").value.trim()));
+    const query = new URLSearchParams({ dir: $("#scripts-dir").value.trim(), pipeline_file: state.file || "" });
+    const res = await api("GET", "/api/scripts?" + query);
     state.library = res.scripts;
     if (!res.scripts.length) list.append(h("li", { class: "empty" }, "No .py files in this folder"));
     for (const s of res.scripts) {
@@ -439,6 +440,7 @@ function pipelineInfo() {
       "args = ap.parse_args()"),
     h("p", { class: "hint" }, "Outputs are written to ", h("code", {}, "<output dir>\\<path>"),
       ". An empty Output dir means the folder the pipeline file is saved in. ",
+      "Other relative paths (inputs, scripts, Output dir, Python) are relative to that same folder. ",
       "Scripts run with their own folder as the working directory."),
     h("h2", {}, "Shortcuts"),
     h("p", { class: "hint" },
@@ -652,7 +654,7 @@ function dialogStart() {
 }
 
 /** Windows file or folder picker (via the local server), starting at `current` (a file or folder).
- *  Returns the chosen path, or null if cancelled or unavailable. */
+ *  Returns the chosen path (relative to the pipeline's folder when inside it), or null. */
 async function pickPath(kind, current, title) {
   try {
     const res = await api("POST", `/api/dialog/${kind}`, {
@@ -660,6 +662,8 @@ async function pickPath(kind, current, title) {
       initial_dir: current || "",
       initial_file: kind === "file" && current && /\.\w+$/.test(basename(current)) ? basename(current) : "",
       title,
+      pipeline_file: state.file || "",
+      relative: true,
     });
     return res.path;
   } catch (e) {
@@ -673,7 +677,7 @@ async function chooseFile(kind) {
   const { dir, file } = dialogStart();
   toast(kind === "save" ? "Choose where to save in the Windows dialog…" : "Choose a pipeline in the Windows dialog…");
   try {
-    const res = await api("POST", `/api/dialog/${kind}`, { initial_dir: dir, initial_file: file });
+    const res = await api("POST", `/api/dialog/${kind}`, { initial_dir: dir, initial_file: file, pipeline_file: state.file || "" });
     $("#toast").classList.remove("show");
     return res.path;
   } catch (e) {
@@ -688,14 +692,37 @@ async function writeFile(path) {
   try {
     const res = await api("PUT", "/api/pipeline-file", { path, pipeline: state.pipeline });
     setFile(res.path);
+    if (res.pipeline) applyRebased(res.pipeline);
     setDirty(false);
     persist();
     loadPipelineList();
-    analyze();   // the default output folder may have changed with the file location
+    loadScripts();   // library paths are shown relative to the pipeline's folder
+    analyze();       // the default output folder may have changed with the file location
     toast(`Saved to ${res.path}`);
   } catch (e) {
     toast(`Save failed: ${e.message}`);
   }
+}
+
+/** After Save as… to another folder the server rewrote relative paths so they still point
+ *  at the same files; take those paths over. */
+function applyRebased(p) {
+  const s = state.pipeline;
+  for (const k of ["python", "workdir", "scripts_dir"]) s[k] = p[k];
+  for (const n of p.nodes) {
+    const m = s.nodes.find((x) => x.id === n.id);
+    if (!m) continue;
+    m.script = n.script;
+    for (const pt of n.inputs) {
+      const mp = m.inputs.find((x) => x.name === pt.name);
+      if (mp) mp.path = pt.path;
+    }
+  }
+  $("#pipe-python").value = s.python;
+  $("#pipe-workdir").value = s.workdir;
+  $("#scripts-dir").value = s.scripts_dir;
+  editor.render();
+  renderInspector();
 }
 
 async function saveAs() {
