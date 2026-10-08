@@ -174,13 +174,16 @@ h2:not(:first-child) { margin-top: 18px; }
 .swatch.in { background: var(--port-in); }
 .swatch.out { background: var(--port-out); }
 .swatch.param { background: var(--muted); border-radius: 2px; }
-.prow { display: grid; grid-template-columns: 1fr 1.35fr 26px; gap: 5px; margin-bottom: 5px; align-items: center; }
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) 26px; gap: 5px; margin-bottom: 5px; align-items: center; }
 .prow.head { color: #6f727c; font-size: 11px; margin-bottom: 3px; }
 .linked {
   color: var(--port-in); font-size: 12px; padding: 0 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .icon-btn { padding: 3px 0; color: var(--muted); }
+.path-field { display: flex; gap: 3px; min-width: 0; }
+.path-field input { flex: 1; min-width: 0; }
+.path-field .icon-btn { padding: 3px 4px; font-size: 12px; flex-shrink: 0; }
 .add-btn { width: 100%; border-style: dashed; background: none; color: var(--muted); margin-top: 2px; }
 .actions { display: flex; gap: 6px; margin-top: 14px; }
 .actions button { flex: 1; }

@@ -20,7 +20,8 @@ The demo pipeline (`examples/pipelines/demo.json`) loads on first start.
    one. Browsers can't see the full path of files dragged from Explorer, so use the library or
    *Add by path*.
 2. **Inspector** (right): select a node and add
-   - **Inputs**: files the script reads. Connect one from another node, or type a file path.
+   - **Inputs**: files or folders the script reads. Connect one from another node, or set a path:
+     type it, or use 📄 / 📁 to pick a file or folder in the Windows dialog.
    - **Outputs**: files the script writes. The value is the file name.
    - **Parameters**: other arguments (`--threshold 0.5`; leave the value empty for a bare flag).
 3. **Connect**: drag from an orange output dot to a blue input dot (either direction works).

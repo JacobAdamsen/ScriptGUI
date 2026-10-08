@@ -306,10 +306,20 @@ function nodeInspector(node) {
       const text = `← ${labelOf(e.source)} · ${e.source_port}`;
       return h("span", { class: "linked", title: `${text} (drag the edge off the input to disconnect)` }, text);
     }
-    return h("input", {
-      value: port.path, placeholder: "file path (required)", spellcheck: "false",
-      oninput: (ev) => { port.path = ev.target.value; modelChanged(); },
+    const input = h("input", {
+      value: port.path, placeholder: "file or folder path (required)", spellcheck: "false", title: port.path,
+      oninput: (ev) => { port.path = ev.target.value; ev.target.title = port.path; modelChanged(); },
     });
+    const browse = async (kind) => {
+      const path = await pickPath(kind, port.path || state.pipeline.scripts_dir,
+        `Choose ${kind === "folder" ? "folder" : "file"} for --${port.name}`);
+      if (!path) return;
+      port.path = input.value = input.title = path;
+      modelChanged();
+    };
+    return h("div", { class: "path-field" }, input,
+      h("button", { class: "icon-btn", title: "Choose a file", onclick: () => browse("file") }, "📄"),
+      h("button", { class: "icon-btn", title: "Choose a folder", onclick: () => browse("folder") }, "📁"));
   };
   const outputCol = (port) => h("input", {
     value: port.path, placeholder: port.name, spellcheck: "false",
@@ -641,6 +651,23 @@ function dialogStart() {
   return { dir: isAbsolute(dir) ? dir : "pipelines", file };
 }
 
+/** Windows file or folder picker (via the local server), starting at `current` (a file or folder).
+ *  Returns the chosen path, or null if cancelled or unavailable. */
+async function pickPath(kind, current, title) {
+  try {
+    const res = await api("POST", `/api/dialog/${kind}`, {
+      // Preselect the current file in the file dialog, but not a folder name (no extension).
+      initial_dir: current || "",
+      initial_file: kind === "file" && current && /\.\w+$/.test(basename(current)) ? basename(current) : "",
+      title,
+    });
+    return res.path;
+  } catch (e) {
+    toast(`Could not open the ${kind === "folder" ? "folder" : "file"} dialog: ${e.message}`);
+    return null;
+  }
+}
+
 /** Show the Windows Save As / Open dialog (via the local server). Returns a path or null. */
 async function chooseFile(kind) {
   const { dir, file } = dialogStart();
@@ -778,14 +805,10 @@ function bindUI() {
   $("#pipe-python").oninput = (ev) => { state.pipeline.python = ev.target.value; changed(); };
   $("#pipe-workdir").oninput = (ev) => { state.pipeline.workdir = ev.target.value; changed(); };
   $("#btn-workdir").onclick = async () => {
-    try {
-      const res = await api("POST", "/api/dialog/folder", { initial_dir: $("#pipe-workdir").value || $("#pipe-workdir").placeholder });
-      if (!res.path) return;
-      $("#pipe-workdir").value = state.pipeline.workdir = res.path;
-      changed();
-    } catch (e) {
-      toast(`Could not open the folder dialog: ${e.message}`);
-    }
+    const path = await pickPath("folder", $("#pipe-workdir").value || $("#pipe-workdir").placeholder, "Choose output folder");
+    if (!path) return;
+    $("#pipe-workdir").value = state.pipeline.workdir = path;
+    changed();
   };
 
   $("#scripts-dir").onchange = (ev) => { state.pipeline.scripts_dir = ev.target.value; changed(); loadScripts(); };

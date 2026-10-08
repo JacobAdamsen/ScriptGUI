@@ -150,18 +150,20 @@ def load_pipeline_file(path: str):
 
 
 class DialogRequest(BaseModel):
-    initial_dir: str = ""
+    initial_dir: str = ""     # a folder, or a file whose folder is used
     initial_file: str = ""
+    title: str = ""
 
 
 # Runs in a separate process: Tk must not live in the server's worker threads
 # (it can crash the server with "Tcl_AsyncDelete: async handler deleted by the wrong thread").
+# Kinds: save / open (pipeline .json files), file (any file), folder.
 DIALOG_SCRIPT = r'''
 import sys
 import tkinter as tk
 from tkinter import filedialog
 
-kind, initial_dir, initial_file = sys.argv[1:4]
+kind, initial_dir, initial_file, title = sys.argv[1:5]
 root = tk.Tk()
 root.withdraw()
 root.attributes("-topmost", True)  # don't open behind the browser
@@ -171,26 +173,35 @@ if initial_dir:
     opts["initialdir"] = initial_dir
 types = [("Pipeline files", "*.json"), ("All files", "*.*")]
 if kind == "save":
-    path = filedialog.asksaveasfilename(title="Save pipeline as", initialfile=initial_file,
+    path = filedialog.asksaveasfilename(title=title or "Save pipeline as", initialfile=initial_file,
                                         filetypes=types, defaultextension=".json", **opts)
 elif kind == "folder":
-    path = filedialog.askdirectory(title="Choose output folder", mustexist=False, **opts)
+    path = filedialog.askdirectory(title=title or "Choose folder", mustexist=False, **opts)
+elif kind == "file":
+    path = filedialog.askopenfilename(title=title or "Choose file", initialfile=initial_file,
+                                      filetypes=[("All files", "*.*")], **opts)
 else:
-    path = filedialog.askopenfilename(title="Open pipeline", filetypes=types, **opts)
+    path = filedialog.askopenfilename(title=title or "Open pipeline", filetypes=types, **opts)
 root.destroy()
 sys.stdout.write(path or "")
 '''
 
+DIALOG_KINDS = ("save", "open", "file", "folder")
 _dialog_lock = threading.Lock()
 
 
-def file_dialog(kind: str, initial_dir: str, initial_file: str) -> str | None:
+def file_dialog(kind: str, initial_dir: str, initial_file: str, title: str = "") -> str | None:
     """Show the native Windows Open / Save As / folder dialog on this PC (the server runs locally)."""
-    folder = resolve(initial_dir) if initial_dir else None
-    start = str(folder) if folder and folder.is_dir() else ""
+    start = ""
+    if initial_dir.strip():
+        folder = resolve(initial_dir)
+        if folder.is_file():
+            folder = folder.parent
+        if folder.is_dir():
+            start = str(folder)
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}  # paths with æ/ø/å
     with _dialog_lock:
-        r = subprocess.run([sys.executable, "-c", DIALOG_SCRIPT, kind, start, initial_file],
+        r = subprocess.run([sys.executable, "-c", DIALOG_SCRIPT, kind, start, initial_file, title],
                            capture_output=True, text=True, encoding="utf-8", env=env)
     if r.returncode != 0:
         lines = r.stderr.strip().splitlines()
@@ -202,10 +213,10 @@ def file_dialog(kind: str, initial_dir: str, initial_file: str) -> str | None:
 @app.post("/api/dialog/{kind}")
 async def open_file_dialog(kind: str, req: DialogRequest):
     """Returns {"path": chosen path} or {"path": null} if the dialog was cancelled."""
-    if kind not in ("save", "open", "folder"):
+    if kind not in DIALOG_KINDS:
         raise HTTPException(404, f"Unknown dialog '{kind}'")
     try:
-        path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file)
+        path = await asyncio.to_thread(file_dialog, kind, req.initial_dir, req.initial_file, req.title)
     except RuntimeError as e:
         raise HTTPException(501, f"Can't show the file dialog: {e}")
     return {"path": path}
