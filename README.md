@@ -32,6 +32,11 @@ The demo pipeline (`examples/pipelines/demo.json`) loads on first start.
    Drag an edge off an input to re-route it, or click it and press `Del`.
 4. **Run all**, or select a node and **Run from selected** to re-run it and everything downstream.
    Upstream outputs must already exist from an earlier run.
+5. **Logs** (bottom): one tab per script. As in CI logs, stdout and stderr look the same and lines are
+   highlighted by content: tracebacks, `ERROR`/`CRITICAL` and `…Error:` lines in red, `WARNING` and
+   Python `…Warning:` lines in yellow. Each tab shows its ✖ error / ⚠ warning count. Whether a step
+   failed is decided only by its exit code. Problems found when you click Run stay in the Issues tab
+   until the next run.
 
 Each node runs as:
 
@@ -74,6 +79,7 @@ args = ap.parse_args()
 | `scriptgui/models.py` | Pipeline / Node / Port / Param / Edge models (the saved JSON format) |
 | `static/editor.js` | SVG node editor (pan, zoom, drag, connect) |
 | `static/app.js` | Toolbar, library, inspector, run controls, log panel |
+| `static/loglevels.js` | Log-line highlighting (error / warning levels, tracebacks) |
 | `examples/` | Three demo scripts and the demo pipeline |
 
 ## Saving pipelines

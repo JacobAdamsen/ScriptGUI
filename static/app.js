@@ -1,5 +1,6 @@
 // App shell: toolbar, script library, inspector, run controls and log panel.
 import { Editor, NODE_W } from "./editor.js";
+import { createClassifier } from "./loglevels.js";
 
 const $ = (sel) => document.querySelector(sel);
 const STORAGE_KEY = "scriptgui.current";
@@ -10,10 +11,12 @@ const state = {
   pipeline: null,
   file: null,       // full path of the .json this pipeline is saved in (null = not saved yet)
   dirty: false,
-  issues: [],
+  issues: [],       // static checks, refreshed while editing
+  runIssues: [],    // problems found when Run was clicked; kept until the next run
   commands: {},
   library: [],      // scripts in the current library folder
-  logs: {},         // node id -> [{stream, line}]
+  logs: {},         // node id -> [{stream, line, level}]
+  logMeta: {},      // node id -> {classify, warnings, errors}
   logTab: "issues",
   ws: null,
   running: false,
@@ -126,8 +129,10 @@ function setPipeline(p, dirty = false, file = null) {
   state.pipeline = normalize(p);
   setFile(file);
   state.logs = {};
+  state.logMeta = {};
   state.logTab = "issues";
   state.issues = [];
+  state.runIssues = [];
   state.commands = {};
   $("#pipe-name").value = state.pipeline.name;
   $("#pipe-python").value = state.pipeline.python;
@@ -157,30 +162,42 @@ function showWorkdir(resolved) {
 
 let analyzeTimer;
 let analyzeSeq = 0;
+let latestAnalysis = Promise.resolve(null);
 function scheduleAnalyze() {
   clearTimeout(analyzeTimer);
   analyzeTimer = setTimeout(analyze, 250);
 }
 
-async function analyze() {
+/** Nodes to outline in red: static errors plus problems from the last run. */
+function errorNodeIds() {
+  return [...state.issues, ...state.runIssues].filter((i) => i.level === "error" && i.node).map((i) => i.node);
+}
+
+/** Static checks + command preview for the current pipeline. Always resolves with the newest
+ *  result: if a newer check starts before this one returns, its answer is used instead. */
+function analyze() {
+  clearTimeout(analyzeTimer);   // checking now, so a scheduled check is not needed
   const seq = ++analyzeSeq;
-  try {
-    const res = await api("POST", "/api/validate", state.pipeline);
-    if (seq !== analyzeSeq) return res;   // a newer request is on its way
-    state.issues = res.issues;
-    state.commands = res.commands;
-    showWorkdir(res.workdir);
-    editor.setErrors(res.issues.filter((i) => i.level === "error" && i.node).map((i) => i.node));
-    const pre = $("#cmd-preview");
-    const sel = editor.selection;
-    if (pre && sel?.type === "node") pre.textContent = state.commands[sel.node.id] ?? "";
-    renderLogTabs();
-    if (state.logTab === "issues") renderLogs();
-    return res;
-  } catch (e) {
-    console.error(e);
-    return null;
-  }
+  latestAnalysis = (async () => {
+    try {
+      const res = await api("POST", "/api/validate", state.pipeline);
+      if (seq !== analyzeSeq) return latestAnalysis;   // superseded: answer with the newest
+      state.issues = res.issues;
+      state.commands = res.commands;
+      showWorkdir(res.workdir);
+      editor.setErrors(errorNodeIds());
+      const pre = $("#cmd-preview");
+      const sel = editor.selection;
+      if (pre && sel?.type === "node") pre.textContent = state.commands[sel.node.id] ?? "";
+      renderLogTabs();
+      if (state.logTab === "issues") renderLogs();
+      return res;
+    } catch (e) {
+      console.error(e);
+      return null;
+    }
+  })();
+  return latestAnalysis;
 }
 
 // ---------------------------------------------------------------- script library
@@ -452,56 +469,97 @@ function pipelineInfo() {
 
 // ---------------------------------------------------------------- log panel
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function renderLogTabs() {
   if (!state.pipeline) return;
   const tabs = $("#log-tabs");
   tabs.replaceChildren();
-  const errs = state.issues.filter((i) => i.level === "error").length;
-  const warns = state.issues.length - errs;
-  const badge = h("span", { class: `badge ${errs ? "error" : warns ? "warning" : ""}` }, errs + warns || "✓");
+  const all = [...state.runIssues, ...state.issues];
+  const errs = all.filter((i) => i.level === "error").length;
+  const badge = h("span", { class: `badge ${errs ? "error" : all.length ? "warning" : ""}` }, all.length || "✓");
   tabs.append(logTab("issues", badge, "Issues"));
   const nodes = [...state.pipeline.nodes].sort((a, b) => a.x - b.x || a.y - b.y);
   for (const n of nodes) {
-    tabs.append(logTab(n.id, h("span", { class: `sdot ${editor.status[n.id] || ""}` }), n.label || n.id));
+    const meta = state.logMeta[n.id];
+    tabs.append(logTab(n.id, h("span", { class: `sdot ${editor.status[n.id] || ""}` }), n.label || n.id,
+      meta?.errors ? h("span", { class: "count error", title: plural(meta.errors, "error") }, `✖ ${meta.errors}`) : null,
+      meta?.warnings ? h("span", { class: "count warning", title: plural(meta.warnings, "warning") }, `⚠ ${meta.warnings}`) : null));
   }
 }
 
-function logTab(id, icon, text) {
+function logTab(id, icon, text, ...counts) {
   return h("button", {
     class: `log-tab${state.logTab === id ? " active" : ""}`,
     onclick: () => { state.logTab = id; renderLogTabs(); renderLogs(); },
-  }, icon, text);
+  }, icon, text, ...counts);
 }
 
-const logLine = (l) => h("div", { class: `log-line ${l.stream}` }, l.line);
+const logLine = (l) => h("div", { class: `log-line lvl-${l.level}`, title: l.stream === "stderr" ? "stderr" : null }, l.line);
+const infoLine = (text) => logLine({ stream: "info", line: text, level: "info" });
+
+function issueRow(i) {
+  return h("div", { class: "issue", onclick: () => i.node && selectNode(i.node) },
+    h("span", { class: `lvl ${i.level}` }, i.level),
+    h("span", {}, i.node ? h("b", {}, labelOf(i.node) + ": ") : null, i.message));
+}
 
 function renderLogs() {
+  pendingLines = [];   // the full redraw below already includes them
   const body = $("#log-body");
   body.replaceChildren();
   if (state.logTab === "issues") {
-    if (!state.issues.length) body.append(h("div", { class: "log-line info" }, "No problems found."));
-    for (const i of state.issues) {
-      body.append(h("div", { class: "issue", onclick: () => i.node && selectNode(i.node) },
-        h("span", { class: `lvl ${i.level}` }, i.level),
-        h("span", {}, i.node ? h("b", {}, labelOf(i.node) + ": ") : null, i.message)));
+    if (state.runIssues.length) {
+      body.append(h("div", { class: "issue-head" }, "Found when you clicked Run (checked again on the next run)"));
+      body.append(...state.runIssues.map(issueRow));
+      body.append(h("div", { class: "issue-head" }, "Pipeline checks"));
     }
+    if (!state.issues.length) body.append(infoLine("No problems found."));
+    body.append(...state.issues.map(issueRow));
     return;
   }
   const lines = state.logs[state.logTab] || [];
-  if (!lines.length) body.append(h("div", { class: "log-line info" }, "No output yet. Run the pipeline to see this script's output."));
+  if (!lines.length) body.append(infoLine("No output yet. Run the pipeline to see this script's output."));
   body.append(...lines.map(logLine));
   body.scrollTop = body.scrollHeight;
 }
 
+const newLogMeta = () => ({ classify: createClassifier(), warnings: 0, errors: 0 });
+
 function appendLog(nodeId, stream, line) {
+  const meta = (state.logMeta[nodeId] ??= newLogMeta());
+  const { level, starts } = meta.classify(stream, line);
+  const entry = { stream, line, level };
   const lines = (state.logs[nodeId] ??= []);
-  lines.push({ stream, line });
+  lines.push(entry);
   if (lines.length > MAX_LOG_LINES) lines.splice(0, lines.length - MAX_LOG_LINES);
+  if (starts) {
+    meta[level === "error" ? "errors" : "warnings"]++;
+    renderLogTabs();   // update the tab's ✖ / ⚠ count
+  }
   if (state.logTab !== nodeId) return;
   if (lines.length === 1) return renderLogs();   // replace the placeholder
+  // Add lines to the page in one batch per frame: per-line updates make the page
+  // unresponsive when a script prints thousands of lines.
+  pendingLines.push(entry);
+  if (pendingLines.length > MAX_LOG_LINES) pendingLines.splice(0, pendingLines.length - MAX_LOG_LINES);
+  if (!flushScheduled) {
+    flushScheduled = true;
+    requestAnimationFrame(flushLogLines);
+  }
+}
+
+let pendingLines = [];     // lines for the open log tab, not on the page yet
+let flushScheduled = false;
+
+function flushLogLines() {
+  flushScheduled = false;
+  if (!pendingLines.length) return;
   const body = $("#log-body");
   const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
-  body.append(logLine({ stream, line }));
+  body.append(...pendingLines.map(logLine));
+  pendingLines = [];
+  while (body.childElementCount > MAX_LOG_LINES) body.firstElementChild.remove();   // same limit as the stored log
   if (atBottom) body.scrollTop = body.scrollHeight;
 }
 
@@ -554,17 +612,24 @@ function runPipeline(startNode = null) {
 function handleRunEvent(msg) {
   switch (msg.type) {
     case "error":
-      state.issues = msg.issues;
-      editor.setErrors(msg.issues.filter((i) => i.node).map((i) => i.node));
+      // Kept apart from the live checks, so editing doesn't wipe them (they're rechecked on the next run).
+      state.runIssues = msg.issues;
+      editor.setErrors(errorNodeIds());
       state.logTab = "issues";
       renderLogTabs();
       renderLogs();
-      setRunStatus(`✖ ${msg.issues.length} problem${msg.issues.length > 1 ? "s" : ""}, nothing was run`, "fail");
+      setRunStatus(`✖ ${plural(msg.issues.length, "problem")}, nothing was run`, "fail");
       finishRun();
       break;
     case "start":
       state.runOrder = msg.order;
-      for (const id of msg.order) state.logs[id] = [];
+      state.runIssues = [];
+      editor.setErrors(errorNodeIds());
+      for (const id of msg.order) {
+        state.logs[id] = [];
+        state.logMeta[id] = newLogMeta();
+      }
+      renderLogTabs();
       break;
     case "status":
       editor.setStatus(msg.node, msg.state);
@@ -579,12 +644,17 @@ function handleRunEvent(msg) {
     case "log":
       appendLog(msg.node, msg.stream, msg.line);
       break;
-    case "done":
-      if (msg.ok) setRunStatus(`✔ Ran ${state.runOrder.length} script${state.runOrder.length > 1 ? "s" : ""} in ${msg.seconds}s`, "ok");
-      else if (msg.cancelled) setRunStatus("■ Cancelled", "fail");
+    case "done": {
+      // Like "Build succeeded with 2 warnings": success comes from the exit codes, warnings are extra info.
+      const warnings = state.runOrder.reduce((sum, id) => sum + (state.logMeta[id]?.warnings || 0), 0);
+      if (msg.ok) {
+        setRunStatus(`✔ Ran ${plural(state.runOrder.length, "script")} in ${msg.seconds}s`
+          + (warnings ? ` · ${plural(warnings, "warning")}` : ""), "ok");
+      } else if (msg.cancelled) setRunStatus("■ Cancelled", "fail");
       else setRunStatus(`✖ Failed at ${labelOf(msg.failed)}`, "fail");
       finishRun();
       break;
+    }
     case "busy":
       toast("A run is already in progress.");
       break;

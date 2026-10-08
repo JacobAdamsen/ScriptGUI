@@ -221,8 +221,19 @@ pre.cmd {
   flex: 1; overflow: auto; background: var(--bg); padding: 8px 12px;
   font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
 }
-.log-line.stderr { color: #ff8f86; }
-.log-line.info { color: var(--muted); }
+/* Highlighted by log level (see loglevels.js), not by stdout/stderr */
+.log-line { padding-left: 6px; border-left: 2px solid transparent; }
+.log-line.lvl-info { color: var(--muted); }
+.log-line.lvl-warning { color: #f0c36a; border-left-color: var(--warn); background: rgba(230, 162, 60, .07); }
+.log-line.lvl-error { color: #ff8f86; border-left-color: var(--fail); background: rgba(224, 82, 74, .08); }
+.log-tab .count { font-size: 11px; font-weight: 600; }
+.log-tab .count.error { color: var(--fail); }
+.log-tab .count.warning { color: var(--warn); }
+.issue-head {
+  font: 600 11px "Segoe UI", system-ui, sans-serif; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: 8px 0 4px;
+}
+.issue-head:first-child { margin-top: 0; }
 .issue { display: flex; gap: 10px; padding: 2px 0; cursor: pointer; font-family: "Segoe UI", system-ui, sans-serif; }
 .issue:hover { color: #fff; }
 .issue .lvl { width: 58px; flex-shrink: 0; font-weight: 600; text-transform: uppercase; font-size: 11px; padding-top: 1px; }

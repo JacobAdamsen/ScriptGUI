@@ -355,6 +355,8 @@ class Runner:
 
     async def _run_node(self, p: Pipeline, node: Node, paths: Paths, emit: Emit) -> bool:
         async def log(stream: str, line: str) -> None:
+            """stream: "stdout"/"stderr" for the script's own output, or "info"/"warning"/"error"
+            for ScriptGUI's messages. The frontend highlights script output by content, not stream."""
             await emit({"type": "log", "node": node.id, "stream": stream, "line": line})
 
         async def status(state: str) -> None:
@@ -377,7 +379,7 @@ class Runner:
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
             )
         except OSError as e:
-            await log("stderr", f"Could not start process: {e}")
+            await log("error", f"Could not start process: {e}")
             await status("failed")
             return False
         self._proc = proc
@@ -419,12 +421,12 @@ class Runner:
             await status("cancelled")
             return False
         if rc != 0:
-            await log("info", f"Exited with code {rc} after {secs}s")
+            await log("error", f"Process exited with code {rc} after {secs}s")
             await status("failed")
             return False
         for f in paths[node.id]["outputs"].values():
             if not f.exists():
-                await log("stderr", f"Warning: expected output was not created: {f}")
+                await log("warning", f"Expected output was not created: {f}")
         await log("info", f"Finished in {secs}s")
         await status("success")
         return True
